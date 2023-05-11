@@ -7,6 +7,12 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+
+pacman::p_load(tidyverse, janitor, lubridate, SDLfilter, ggmap, amt,
+               gganimate, sp, terra, adehabitatHR, sf)
+
+ggmap::register_google(key = "AIzaSyAH3qnqmxDATEluG8lKt2KtnHKLYJc2WaM")
+
 ```
 
 # Introduction
@@ -25,6 +31,7 @@ birds <- c("Briar", "Nutmeg", "Star", "Aurora", "Robin", "Daisy",
            "Iona", "Sage", "Koda", "Brook", "Clover", "Wobbles",
            "Prem", "Rove", "Valentine", "Marmalade")
 
+# import data from movebank and filter to study birds 
 data_raw <- read.csv("movebank_20230510.csv") %>%
   clean_names() %>%
   rename(id = individual_local_identifier,
@@ -37,24 +44,256 @@ data_raw <- read.csv("movebank_20230510.csv") %>%
                                tz = "Australia/Sydney")) %>%
   mutate(date = date(DateTime))
 
+# filter out points with a hdop >1.4
 data_hdop <- data_raw %>%
   filter(qi>5,
          gps_hdop<1.4) #hdop recent addition 16 jan to improve accuracy
 
+# filter out points using speed-based filtering
 data_filt <- data_hdop %>%
   dupfilter() %>%
   ddfilter_speed(vmax=4, method=2)%>%
   rename(date_time = DateTime)
 
-data <- data_filt
-
-### plot data cleaning
+# plot data cleaning to check visually
 map <- get_map(c(144.435738, -37.900544), zoom=14, maptype = "satellite")
 ggmap(map)+
   geom_point(data=data_raw, aes(lon, lat), color="red")+
   geom_point(data=data_hdop, aes(lon, lat), color="yellow")+
   geom_point(data=data_filt, aes(lon, lat), color="blue")
 
+# save data
+write.csv(data_filt, "movebank_20230510_clean.csv", row.names = FALSE)
+
+```
+
+## Distance
+
+Here we calculate two distance metrics: 
+  1) distance from release location
+  2) total distance moved daily
+
+```{r distance from release}
+
+# read in clean data
+data <- read.csv("movebank_20230510_clean.csv")
+
+# specify the coords of each GPS fix
+coords <- as.matrix(cbind(data$utm_easting, data$utm_northing))
+
+# set coords for the release location 
+release  <- matrix(c(274423.45, 5801912.85), ncol=2) #(-37.902374, 144.434323)
+
+# calculate distance between the release location and all fixes
+dist <- mutate(data, dist_release = distance(coords, as.matrix(release), lonlat=FALSE))
+
+# calculate daily summary statistics
+dist_day <- dist %>% group_by(date, id) %>% 
+  dplyr::summarise(mean = mean(dist_release),
+                   max = max(dist_release),
+                   min = min(dist_release)) %>%
+  mutate(date = as_date(date))
+
+# plot average distance from release site per day
+ggplot(dist_day)+
+  geom_path(aes(date, mean, group=id, color=id))+
+  theme_minimal()+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  scale_x_date(date_labels = "%b %Y", breaks = "1 month")+
+  labs(x= element_blank(), y = "Mean daily distance from release location (m)")+
+  scale_color_viridis_d()
+
+# save results
+write.csv(dist_day, "distance_release.csv", row.names = FALSE)
+
+```
+
+Total distance moved daily gives an indication of the activity levels of the bird.
+
+```{r distance moved daily}
+# read in clean data
+data <- read.csv("movebank_20230510_clean.csv") %>% 
+  mutate(date_time = as_date(date_time))
+
+# convert to track
+track <- make_track(data, .x = utm_easting,.y= utm_northing,
+                    .t= date_time, id = id) %>%
+  nest(data = -"id")
+
+# loop through distance per day per bird
+dates <- unique(data$date)
+dist <- data.frame()
+
+birds <- c("Briar", "Nutmeg", "Star", "Aurora", "Robin", "Daisy",
+           "Iona", "Sage", "Koda", "Brook", "Clover", "Wobbles",
+           "Prem", "Rove", "Valentine", "Marmalade")
+
+for (i in 1:length(birds)){
+  for (j in 1:length(dates)){
+    
+    t <-  track$data[[i]] %>%
+      mutate(date = date(t_)) %>%
+      filter(date==dates[j])
+    
+    if (nrow(t)<2){
+      next
+    }
+    
+    out <- data.frame(dist= cum_dist(t)/1000,
+                      bird = track$id[[i]],
+                      date = dates[j])
+    
+    print(out)
+    
+    dist <- rbind.data.frame(dist, out)
+    
+  }}
+
+dist <- dist %>%
+  mutate(date = as_date(date))
+
+# save results
+write.csv(dist, "distance_daily.csv")
+
+# plot
+ggplot(dist)+
+  geom_path(aes(date, dist, group = bird, color=bird))+
+  theme_minimal()+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  scale_x_date(date_labels = "%b %Y", breaks = "1 month")+
+  labs(x= element_blank(), y = "Total daily distance moved (km)")+
+  scale_color_viridis_d()
+```
+
+
+Can add the weather to the distance moved graph, to visually inspect any potential correlation. The weather data came from the BOM climate data online
+http://www.bom.gov.au/climate/data/ observations were drawn from Avalon Airport {station 087113}.
+
+```{r distance and weather}
+
+# read in weather data, which are stored by month
+weather <- list.files(pattern = "IDC") %>%
+  map_df(~read_csv(., locale=locale(encoding="latin1"),show_col_types = FALSE)) %>%
+  mutate(date = as.Date(Date, tryFormats="%d/%m/%Y"))
+
+# read in distance data
+dist <- read.csv("distance_daily.csv")
+
+# plot  
+ggplot()+
+  geom_ribbon(data=weather, aes(x = date, 
+                               ymin=`Minimum temperature (°C)`,
+                               ymax=`Maximum temperature (°C)`),
+              fill="purple", alpha=0.1) + 
+  
+  xlim(as.Date("2022-10-25"), NA)+
+  geom_path(data=dist, aes(date, dist, color=bird))+
+  theme_minimal()+
+  scale_color_viridis_d()+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  scale_x_date(date_labels = "%b %Y", breaks = "1 month")+
+  labs(x= element_blank(), y = "Total daily distance moved (km)")+
+  scale_y_continuous(name = "Temperature (°C)",
+    sec.axis = sec_axis( trans=~.*1, name="Distance moved (km)"))
+
+```
+
+### Home range
+
+Core 50% KUD and full 90% KUD home range using kernel utilisation density. 
+
+```{r home range}
+
+# read in clean data
+data <- read.csv("movebank_20230510_clean.csv")
+
+# convert GPS fixes to spatial points data frame
+locs <- SpatialPointsDataFrame(coordinates(
+  cbind(data$utm_easting, data$utm_northing)),
+  data = dplyr::select(data, id))
+
+# calculate home range 
+## 90% kud
+hr_90 <-  kernelUD(locs, h="href", grid=100) %>% 
+  getverticeshr(percent = 90)
+
+## 50% kud
+hr_50 <-  kernelUD(locs, h="href", grid=100) %>% 
+  getverticeshr(percent = 50)
+
+# transform to latlon
+## 90% kud
+proj4string(hr_90) <- CRS("EPSG:32755") #set crs
+hr_90ll <- spTransform(hr_90, CRS("EPSG:4326")) %>% #transform to lat lon
+  st_as_sf()
+
+## 50% kud
+proj4string(hr_50) <- CRS("EPSG:32755") #set crs
+hr_50ll <- spTransform(hr_50, CRS("EPSG:4326")) %>% #transform to lat lon
+  st_as_sf()
+
+# background map for plotting
+map <- get_map(c(144.435738, -37.900544), zoom=15, maptype = "satellite") 
+
+# plot map
+## 90% kud
+ggmap(map)+
+  geom_sf(data=hr_90ll, aes(fill=id), alpha = .7, inherit.aes = FALSE) +
+  scale_fill_viridis_d()
+
+## 50% kud
+ggmap(map)+
+  geom_sf(data=hr_50ll, aes(fill=id), alpha = .7, inherit.aes = FALSE) +
+  scale_fill_viridis_d()
+
+# save results
+hr <- data.frame(id = hr_90@data$id,
+                 kud90 = hr_90@data$area,
+                 kud50 = hr_50@data$area)
+write.csv(hr, "hr_area.csv", row.names = FALSE)
+
+```
+
+And daily home range
+
+```{r home range daily}
+
+# read in clean data
+data <- read.csv("movebank_20230510_clean.csv") %>%
+  mutate(date = as_date(date))
+
+# convert GPS fixes to spatial points data frame
+locs <- SpatialPointsDataFrame(coordinates(
+  cbind(data$utm_easting, data$utm_northing)),
+  data = data)
+
+# loop through birds and days for 90% KUD
+birds <- as.character(unique(data$id))
+days <- unique(locs[["date"]])
+
+hr_daily <- data.frame()
+
+for (i in 1:length(birds)){
+  for (j in 1:length(days)){
+    points <- subset(locs, id == birds[i] & date == days[j],
+                     select = id)
+    if (length(points)<5){
+      next
+    }
+    kud <- kernelUD(points[,1], h="href", grid=1000, extent = 5) %>% 
+      getverticeshr(percent = 90) %>%
+      st_as_sf() %>%
+      mutate(date = days[j])
+
+    print(head(kud, n= 1L))
+    
+    hr_daily <- rbind.data.frame(hr_daily, kud)
+  }}
+
+# extract area per day
+hr_area <- st_drop_geometry(hr_daily)
+write.csv(hr_area, "hr_daily_area.csv", row.names = TRUE)
+    
 
 ```
 
