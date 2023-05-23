@@ -9,7 +9,8 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 
 pacman::p_load(tidyverse, janitor, lubridate, SDLfilter, ggmap, amt,
-               gganimate, sp, terra, adehabitatHR, sf)
+               gganimate, sp, terra, adehabitatHR, sf, glmmTMB, adehabitatLT,
+               wildlifeDI, gtools)
 
 ggmap::register_google(key = "AIzaSyAH3qnqmxDATEluG8lKt2KtnHKLYJc2WaM")
 
@@ -92,7 +93,8 @@ dist_day <- dist %>% group_by(date, id) %>%
   dplyr::summarise(mean = mean(dist_release),
                    max = max(dist_release),
                    min = min(dist_release)) %>%
-  mutate(date = as_date(date))
+  mutate(date = as_date(date)) %>%
+  rename(bird = id)
 
 # plot average distance from release site per day
 ggplot(dist_day)+
@@ -103,8 +105,14 @@ ggplot(dist_day)+
   labs(x= element_blank(), y = "Mean daily distance from release location (m)")+
   scale_color_viridis_d()
 
+# and summary stats for whole period
+dist_summary <- read.csv("distance_release.csv") %>%
+  group_by(bird) %>%
+  summarise(mean_daily_dist = mean(mean))
+
 # save results
 write.csv(dist_day, "distance_release.csv", row.names = FALSE)
+write.csv(dist_summary, "distance_release_mean.csv", row.names = FALSE)
 
 ```
 
@@ -152,8 +160,14 @@ for (i in 1:length(birds)){
 dist <- dist %>%
   mutate(date = as_date(date))
 
+# and as an average over the study period
+dist_summary <- dist %>% 
+  group_by(bird) %>%
+  summarise(mean_daily_dist = mean(dist))
+
 # save results
-write.csv(dist, "distance_daily.csv")
+write.csv(dist, "distance_daily.csv", row.names = FALSE)
+write.csv(dist_summary, "distance_daily_mean.csv", row.names = FALSE)
 
 # plot
 ggplot(dist)+
@@ -164,7 +178,6 @@ ggplot(dist)+
   labs(x= element_blank(), y = "Total daily distance moved (km)")+
   scale_color_viridis_d()
 ```
-
 
 Can add the weather to the distance moved graph, to visually inspect any potential correlation. The weather data came from the BOM climate data online
 http://www.bom.gov.au/climate/data/ observations were drawn from Avalon Airport {station 087113}.
@@ -198,7 +211,7 @@ ggplot()+
 
 ```
 
-### Home range
+## Home range
 
 Core 50% KUD and full 90% KUD home range using kernel utilisation density. 
 
@@ -247,14 +260,14 @@ ggmap(map)+
   scale_fill_viridis_d()
 
 # save results
-hr <- data.frame(id = hr_90@data$id,
+hr <- data.frame(bird = hr_90@data$id,
                  kud90 = hr_90@data$area,
                  kud50 = hr_50@data$area)
 write.csv(hr, "hr_area.csv", row.names = FALSE)
 
 ```
 
-And daily home range
+And daily 90% home range
 
 ```{r home range daily}
 
@@ -294,6 +307,271 @@ for (i in 1:length(birds)){
 hr_area <- st_drop_geometry(hr_daily)
 write.csv(hr_area, "hr_daily_area.csv", row.names = TRUE)
     
+
+```
+
+## Sociality
+
+Correlation coefficient
+
+```{r sociality}
+
+# read in clean data
+data <- read.csv("movebank_20230510_clean.csv")
+data <- data %>%
+mutate(date_time = as.POSIXct(date_time))
+
+# set up data in ltraj format for wildlifeDI
+data_ltraj <- as.ltraj(xy = data[,c("utm_easting", "utm_northing")],
+                       date =  data$date_time,
+                       id = data$id,
+                       proj4string = CRS("EPSG:32755"))
+
+# run all combinations of bird interactions for dynamic wildlife interactions
+list <-combinations(n = 16, r = 2, v = 1:16, repeats.allowed = FALSE)
+list1 <- list[,1]
+list2 <- list[,2]
+interact <- data.frame()
+
+# Parallelized loop with progress bar (give the pc 4 cores leftover)
+#cores <- detectCores()
+cl <- makeCluster(6)
+registerDoParallel(cl)
+
+# Initialize a progressor function before running the loop
+library(progressr)
+library(future)
+plan(multisession)
+handlers("txtprogressbar")
+
+calc_interactions <- function(i, list1, list2, data_ltraj) {
+  
+    prox <- tryCatch({
+      data.frame(
+        prox = Prox(data_ltraj[list1[i]], data_ltraj[list2[i]], tc=120, dc=50),
+        bird1 = attr(data_ltraj[[list1[i]]], "id"),
+        bird2 = attr(data_ltraj[[list2[i]]], "id"))
+    }, error = function(e) data.frame(prox = NA, bird1 = NA, bird2 = NA))
+    
+    cr <- tryCatch({
+      data.frame(
+        cr = Cr(data_ltraj[list1[i]], data_ltraj[list2[i]], tc=120),
+        bird1 = attr(data_ltraj[[list1[i]]], "id"),
+        bird2 = attr(data_ltraj[[list2[i]]], "id"))
+    }, error = function(e) data.frame(cr = NA, bird1 = NA, bird2 = NA))
+  
+    
+    cs <- tryCatch({
+      data.frame(
+        cs = Cs(data_ltraj[list1[i]], data_ltraj[list2[i]], tc=120),
+        bird1 = attr(data_ltraj[[list1[i]]], "id"),
+        bird2 = attr(data_ltraj[[list2[i]]], "id"))
+    }, error = function(e) data.frame(cs = NA, bird1 = NA, bird2 = NA))
+  
+      
+    iab <- tryCatch({
+      data.frame(
+        iab = IAB(data_ltraj[list1[i]], data_ltraj[list2[i]], tc=120, dc=50),
+        bird1 = attr(data_ltraj[[list1[i]]], "id"),
+        bird2 = attr(data_ltraj[[list2[i]]], "id"))
+    }, error = function(e) data.frame(iab = NA, bird1 = NA, bird2 = NA))
+  
+      
+    di <- tryCatch({
+      data.frame(
+        di = DI(data_ltraj[list1[i]], data_ltraj[list2[i]], tc=120),
+        bird1 = attr(data_ltraj[[list1[i]]], "id"),
+        bird2 = attr(data_ltraj[[list2[i]]], "id"))
+    }, error = function(e) data.frame(di = NA, bird1 = NA, bird2 = NA))
+  
+  
+    out <- left_join(prox, cr, by = c("bird1", "bird2")) %>%
+      left_join(cs, by = c("bird1", "bird2")) %>%
+      left_join(iab, by = c("bird1", "bird2")) %>%
+      left_join(di, by = c("bird1", "bird2"))
+  
+  out
+}
+
+
+with_progress({
+  p <- progressor(along = list1)
+  
+  # Run the loop using future_lapply, with progress updates
+  results <- future_lapply(1:length(list1), function(i) {
+    p()  # update the progress bar
+    calc_interactions(i, list1, list2, data_ltraj)
+  })
+})
+
+# Combine the results (didn't work because of missmatched rows)
+#interact <- do.call(rbind, results) 
+
+# Combine the results
+interact <- bind_rows(results)
+
+stopCluster(cl)
+
+# save results
+write.csv(interact, "global_interactions.csv", row.names = FALSE)
+
+```
+
+# Modelled response
+
+Here I use the pre-release assays as predictors for the post-release response variables. 
+
+## Predictor variable: latency to reach food
+
+Latency to reach food is how long it took each bird, in seconds, to reach a plate of 
+food provided as part of their normal husbandry, measured from when the plate was 
+placed on the ground until the bird took the first mouthful. 
+
+First, test latency to reach food as a predictor for survival
+
+```{r m1}
+
+# read in data
+m1_data <- left_join(read.csv("survival.csv"), read.csv("latency.csv")) %>%
+  clean_names()
+
+# m1a: reach food (yes/no) and survival (yes/no)
+mosaicplot(table(m1_data$survived, m1_data$reach))
+
+m1a <- chisq.test(table(m1_data$survived, m1_data$reach))
+
+m1a
+
+
+# m1b: latency to reach food (log:seconds) and survival (yes/no)
+ggplot(m1_data, aes(x= survived, y=log(latency), group=survived))+
+  geom_boxplot()+
+  theme_minimal()
+
+m1b <- glmmTMB(survived ~ log(latency) + (1|bird),
+               family = binomial,
+               data = drop_na(m1_data))
+
+summary(m1b)
+
+
+```
+
+Second, test latency to reach food as a predictor for persistence
+
+```{r m2}
+
+# read in data
+m2_data <- left_join(read.csv("survival.csv"), read.csv("latency.csv")) %>%
+  clean_names()
+
+# m2a: reach food (yes/no) and persistence (days)
+ggplot(m2_data, aes(x=reach, y=persistence, group=reach))+
+  geom_boxplot() +
+  theme_minimal()
+
+m2a <- glmmTMB(persistence ~ reach + (1|bird),
+               family = binomial,
+               data = m2_data)
+
+summary(m2a)
+
+# m2b: latency to reach food (log:seconds) and persistence (days)
+ggplot(m2_data, aes(persistence, log(latency)))+
+  geom_point()+
+  geom_smooth(method=lm)+
+  theme_minimal()
+
+m2b <- glmmTMB(persistence ~ log(latency), # unsure why here but there are model convergence problems when i include bird as random effect
+               data = drop_na(m2_data))
+
+summary(m2b)
+
+```
+
+Third, test latency to reach food as a predictor for average distance moved
+
+```{r m3}
+
+# read in data
+m3_data <- left_join(read.csv("distance_daily.csv"),
+                     clean_names(read.csv("latency.csv")), by = "bird")
+
+m3_data_sum <- left_join(read.csv("distance_daily_mean.csv"),
+                     clean_names(read.csv("latency.csv")), by = "bird")
+
+# m3a: reach food (yes/no) and distance moved daily
+ggplot(m3_data_sum, aes(x=reach, y=mean_daily_dist, group=reach))+
+  geom_boxplot() +
+  theme_minimal()
+
+m3a <- glmmTMB(reach ~ dist + (1 | date.x + bird),
+               family = binomial,
+               data = m3_data)
+
+summary(m3a)
+
+# m3b: latency to reach food and distance moved daily
+ggplot(m3_data_sum, aes(mean_daily_dist, latency))+
+  geom_point()+
+  geom_smooth(method=lm)+
+  theme_minimal()
+
+m3b <- glmmTMB(dist ~ log(latency) + (1 | date.x + bird),
+               data = drop_na(m3_data))
+
+summary(m3b)
+
+```
+
+Fourth, test latency to reach food as a predictor for distance moved from the release site
+
+```{r m4}
+# read in data
+m4_data <- left_join(read.csv("distance_release.csv"),
+                     clean_names(read.csv("latency.csv")), by = "bird")
+
+m4_data_sum <- left_join(read.csv("distance_release_mean.csv"),
+                     clean_names(read.csv("latency.csv")), by = "bird")
+
+# m4a: reach food (yes/no) and distance moved from release
+ggplot(m4_data_sum, aes(x=reach, y=mean_daily_dist, group=reach))+
+  geom_boxplot() +
+  theme_minimal()
+
+m4a <- glmmTMB(reach ~ mean + (1| date.x + bird),
+               family = binomial,
+               data = m4_data)
+
+summary(m4a)
+
+# m4b: latency to reach food and distance moved from release
+ggplot(m4_data_sum, aes(mean_daily_dist, latency))+
+  geom_point()+
+  geom_smooth(method=lm)+
+  theme_minimal()
+
+m4b <- glmmTMB(mean ~ log(latency) + (1| date.x + bird),
+               data = drop_na(m4_data))
+
+summary(m4b)
+
+```
+
+## Predictor variable: handling response
+
+Handling response is an ordinal variable assigned during processing, on a scale of 1:3,
+where 1 is calm/still, 2 is moderate/slight kicking or struggling/soft calling or beak clacking, 
+and 3 is extreme/upset/shrieking/growling
+
+First, test handling response as a predictor for survival
+
+```{r m5}
+# read in data
+m5_data <- left_join(read.csv("handling.csv"),
+                     clean_names(read.csv("latency.csv")), by = "bird") %>%
+  filter(type == "Pre")
+
 
 ```
 
