@@ -433,60 +433,34 @@ First, test latency to reach food as a predictor for survival
 
 # read in data
 m1_data <- left_join(read.csv("survival.csv"), read.csv("latency.csv")) %>%
-  clean_names()
+  clean_names() %>%
+  filter(!bird=="Daisy") %>%
+  filter(best==1)
 
 # m1a: reach food (yes/no) and survival (yes/no)
 mosaicplot(table(m1_data$survived, m1_data$reach))
 
 m1a <- chisq.test(table(m1_data$survived, m1_data$reach))
-
 m1a
 
-
-# m1b: latency to reach food (log:seconds) and survival (yes/no)
+# m1b: latency to reach food (seconds) and survival (yes/no)
 ggplot(m1_data, aes(x= survived, y=log(latency), group=survived))+
   geom_boxplot()+
   theme_minimal()
 
-m1b <- glmmTMB(survived ~ log(latency) + (1|bird),
+m1b <- glmmTMB(survived ~ latency + (1|bird),
                family = binomial,
                data = drop_na(m1_data))
-
+  
 summary(m1b)
-
 
 ```
 
-Second, test latency to reach food as a predictor for persistence
+Second, test latency to reach food as a predictor for persistence 
 
 ```{r m2}
 
-# read in data
-m2_data <- left_join(read.csv("survival.csv"), read.csv("latency.csv")) %>%
-  clean_names()
-
-# m2a: reach food (yes/no) and persistence (days)
-ggplot(m2_data, aes(x=reach, y=persistence, group=reach))+
-  geom_boxplot() +
-  theme_minimal()
-
-m2a <- glmmTMB(persistence ~ reach + (1|bird),
-               family = binomial,
-               data = m2_data)
-
-summary(m2a)
-
-# m2b: latency to reach food (log:seconds) and persistence (days)
-ggplot(m2_data, aes(persistence, log(latency)))+
-  geom_point()+
-  geom_smooth(method=lm)+
-  theme_minimal()
-
-m2b <- glmmTMB(persistence ~ log(latency), # unsure why here but there are model convergence problems when i include bird as random effect
-               data = drop_na(m2_data))
-
-summary(m2b)
-
+# unsure here if i can use because persistence non-standard between release cohorts
 ```
 
 Third, test latency to reach food as a predictor for average distance moved
@@ -495,32 +469,34 @@ Third, test latency to reach food as a predictor for average distance moved
 
 # read in data
 m3_data <- left_join(read.csv("distance_daily.csv"),
-                     clean_names(read.csv("latency.csv")), by = "bird")
+                     clean_names(read.csv("latency.csv")), by = "bird") %>%
+  mutate(date.x = (as_date(date.x, format = "%d/%m/%Y"))) %>%
+  filter(!bird=="Daisy")
 
+# visualise
 m3_data_sum <- left_join(read.csv("distance_daily_mean.csv"),
                      clean_names(read.csv("latency.csv")), by = "bird")
 
-# m3a: reach food (yes/no) and distance moved daily
 ggplot(m3_data_sum, aes(x=reach, y=mean_daily_dist, group=reach))+
   geom_boxplot() +
   theme_minimal()
 
-m3a <- glmmTMB(reach ~ dist + (1 | date.x + bird),
-               family = binomial,
-               data = m3_data)
-
-summary(m3a)
-
-# m3b: latency to reach food and distance moved daily
 ggplot(m3_data_sum, aes(mean_daily_dist, latency))+
   geom_point()+
   geom_smooth(method=lm)+
   theme_minimal()
 
-m3b <- glmmTMB(dist ~ log(latency) + (1 | date.x + bird),
-               data = drop_na(m3_data))
+# hurdle model of reach and distance- cant seem to get this to work
+n <- length(unique(m3_data$date.x))
+times <- factor(1:n)
+group <- factor(rep(1,n))
 
-summary(m3b)
+m3 <- glmmTMB(reach ~ dist + ar1(times) + (1|bird),
+              ziformula=~.,   
+              family = binomial,
+              data = m3_data)
+
+summary(m3)
 
 ```
 
@@ -546,12 +522,13 @@ m4a <- glmmTMB(reach ~ mean + (1| date.x + bird),
 summary(m4a)
 
 # m4b: latency to reach food and distance moved from release
+# NEED TO FIX FOR AUTOCORRELATION AMONG DAYS
 ggplot(m4_data_sum, aes(mean_daily_dist, latency))+
   geom_point()+
   geom_smooth(method=lm)+
   theme_minimal()
 
-m4b <- glmmTMB(mean ~ log(latency) + (1| date.x + bird),
+m4b <- glmmTMB(mean ~ log(latency) + (1|bird),
                data = drop_na(m4_data))
 
 summary(m4b)
@@ -564,14 +541,30 @@ Handling response is an ordinal variable assigned during processing, on a scale 
 where 1 is calm/still, 2 is moderate/slight kicking or struggling/soft calling or beak clacking, 
 and 3 is extreme/upset/shrieking/growling
 
-First, test handling response as a predictor for survival
+First, test handling response as a predictor for survival and persistence
 
 ```{r m5}
 # read in data
 m5_data <- left_join(read.csv("handling.csv"),
-                     clean_names(read.csv("latency.csv")), by = "bird") %>%
-  filter(type == "Pre")
+                     clean_names(read.csv("survival.csv")), by = "bird") %>%
+  filter(type == "Pre") %>%
+  filter(!bird=="Daisy") %>%
+  mutate(score = ordered(score)) 
 
+# m5a: handling response and survival
+mosaicplot(table(m5_data$survived, m5_data$score))
+
+m5a <- chisq.test(table(m5_data$survived, m5_data$score))
+m5a
+
+# m5b: handling response and persistence
+ggplot(m5_data, aes(x=score, y=persistence, group=score))+
+  geom_boxplot() +
+  theme_minimal()
+
+m5b <- glmmTMB(persistence ~ score,
+               data = m5_data)
+summary(m5b)
 
 ```
 
