@@ -10,7 +10,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 pacman::p_load(tidyverse, janitor, lubridate, SDLfilter, ggmap, amt,
                gganimate, sp, terra, adehabitatHR, sf, glmmTMB, adehabitatLT,
-               wildlifeDI, gtools)
+               wildlifeDI, gtools, performance)
 
 ggmap::register_google(key = "AIzaSyAH3qnqmxDATEluG8lKt2KtnHKLYJc2WaM")
 
@@ -435,7 +435,11 @@ First, test latency to reach food as a predictor for survival
 m1_data <- left_join(read.csv("survival.csv"), read.csv("latency.csv")) %>%
   clean_names() %>%
   filter(!bird=="Daisy") %>%
-  filter(best==1)
+  mutate(latency = ifelse(is.na(latency), 21600, latency)) %>%
+  group_by(bird) %>%
+  summarise(latency = mean(latency),
+            persistence = max(persistence),
+            offset = max(offset))
 
 # m1a: reach food (yes/no) and survival (yes/no)
 mosaicplot(table(m1_data$survived, m1_data$reach))
@@ -448,11 +452,21 @@ ggplot(m1_data, aes(x= survived, y=log(latency), group=survived))+
   geom_boxplot()+
   theme_minimal()
 
-m1b <- glmmTMB(survived ~ latency + (1|bird),
-               family = binomial,
-               data = drop_na(m1_data))
+ggplot(m1_data, aes(x= persistence, y=log(latency)))+
+  geom_point()+
+  geom_smooth(method=lm)
+
+m1b <- glmmTMB(persistence ~ scale(I(log(latency))) + offset(scale(offset)),
+               family = gaussian,
+               data = m1_data)
   
 summary(m1b)
+
+performance(m1b)
+
+check_model(m1b)
+
+plot(m1b)
 
 ```
 
@@ -471,30 +485,34 @@ Third, test latency to reach food as a predictor for average distance moved
 m3_data <- left_join(read.csv("distance_daily.csv"),
                      clean_names(read.csv("latency.csv")), by = "bird") %>%
   mutate(date.x = (as_date(date.x, format = "%d/%m/%Y"))) %>%
-  filter(!bird=="Daisy")
+  filter(!bird=="Daisy") %>%
+  mutate(latency = ifelse(is.na(latency), 21600, latency),
+         ar = as.numeric(factor(as.numeric(date.x))))
+
+# visualise distance over time
+
+ggplot(m3_data)
 
 # visualise
-m3_data_sum <- left_join(read.csv("distance_daily_mean.csv"),
-                     clean_names(read.csv("latency.csv")), by = "bird")
+m3_data_sum <- m3_data %>%
+  group_by(bird) %>%
+  summarise(latency = mean(latency),
+            dist = mean(dist))
 
 ggplot(m3_data_sum, aes(x=reach, y=mean_daily_dist, group=reach))+
   geom_boxplot() +
   theme_minimal()
 
-ggplot(m3_data_sum, aes(mean_daily_dist, latency))+
+ggplot(m3_data_sum, aes(dist, log(latency)))+
   geom_point()+
   geom_smooth(method=lm)+
   theme_minimal()
 
-# hurdle model of reach and distance- cant seem to get this to work
-n <- length(unique(m3_data$date.x))
-times <- factor(1:n)
-group <- factor(rep(1,n))
+# m3 latency and distance moved
 
-m3 <- glmmTMB(reach ~ dist + ar1(times) + (1|bird),
-              ziformula=~.,   
-              family = binomial,
-              data = m3_data)
+m3 <- glmmTMB(log(latency) ~ scale(dist),
+              family = gaussian,
+              data = m3_data_sum)
 
 summary(m3)
 
