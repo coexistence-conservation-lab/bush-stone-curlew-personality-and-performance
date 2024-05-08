@@ -15,17 +15,21 @@ pacman::p_load(beepr, ggmap, glmmTMB, janitor, SDLfilter, solitude, suncalc, tid
 
 # Google API key for ggmaps
 ggmap::register_google(key = "AIzaSyAH3qnqmxDATEluG8lKt2KtnHKLYJc2WaM")
+
+# Background map Orana zones 1 and 2
+map <- get_map(c(144.4360, -37.9000), zoom=15, maptype = "satellite")
 ```
 
 # Introduction
 
 This Markdown documents pre-release assays and post-release survival and establishment metrics for translocated bush stone-curlews at Mt Rothwell, Victoria. 
 
-# Post-release data
+# Post-release performance
 
-Data are stored on Movebank, and were downloaded for the period 24/10/2022 (one day before the first release) to 17/4/2023 (one day after the 90-day post-release period for the latest released birds. We cleaned the data of GPS errors using the SDLfilter package, which takes user-defined speed and turning angle thresholds to determine outliers. 
+## Data Cleaning
+Telemetry are stored on Movebank, and were downloaded for the period 24/10/2022 (one day before the first release) to 17/4/2023 (one day after the 90-day post-release period for the latest released birds).
 
-```{r speed filterimng}
+```{r movebank data}
 # List of birds in this translocation
 birds <- c("Briar", "Nutmeg", "Star", "Aurora", "Robin", 
            "Iona", "Sage", "Koda", "Brook", "Clover", "Wobbles",
@@ -44,7 +48,12 @@ data_raw <- read.csv("Input/movebank_20221019_20230417.csv") %>%
          lat = location_lat,
          lon = location_long,
          qi = gps_satellite_count); beep('coin')
+```
 
+### Speed-based filtering
+We cleaned the data of GPS errors using the SDLfilter package, which takes user-defined speed and turning angle thresholds to determine outliers. We calculated the maximum linear and loop speeds for each individual bird, and filtered out the top 1% of speeds based on the distance to and from a point. We also removed points taken with less than 5 satellites (which results in higher GPS error). 
+
+```{r speed filterimng}
 # Run SDLfilter for each bird with the speed thresholds calculated per bird 🐢🐢🐢
 data_filt <- data.frame()
 
@@ -60,8 +69,7 @@ for(i in 1:length(birds)){
   data_filt <- rbind(data_filt, temp)
 }; beep('coin')
 
-# plot data cleaning to check visually
-map <- get_map(c(144.4400, -37.9000), zoom=15, maptype = "satellite")
+# Plot data cleaning to check effect of filtering
 ggmap(map)+
   geom_point(data=data_raw, aes(lon, lat), color="red")+
   geom_point(data=data_filt, aes(lon, lat), color="blue")+
@@ -72,92 +80,53 @@ ggmap(map)+
 write.csv(data_filt, "Processed/gpsdata_filtered.csv", row.names = FALSE)
 ```
 
-We then did movement-verified filtering following (Gunner *_et al._* (2022))[https://royalsocietypublishing.org/doi/10.1098/rsif.2021.0692], where the dynamic body acceleration (DBA; sum of tri-axial accelerometer data) should be in line with velocity (calculated from step distance and time from GPS fixes). Stationary points tend to contribute the most to 'jitter', so checking for real movement can help screen for outliers. 
+This reduced the data from x to y i.e., a z% reduction.
+
+### Accelerometer-based filtering
+Additionallt we used movement-verified filtering following (Gunner *_et al._* (2022))[https://royalsocietypublishing.org/doi/10.1098/rsif.2021.0692], where the dynamic body acceleration (DBA; sum of tri-axial accelerometer data) should be in line with velocity (calculated from step distance and time from GPS fixes). Stationary points tend to contribute the most to 'jitter', so checking for real movement can help screen for outliers. 
 
 ```{r MVF}
-# saving temp data im using to test this section with one bird (Briar)
-write.csv(subset, "temp_raw.csv", row.names = FALSE)
-write.csv(temp, "temp_filt.csv", row.names = FALSE)
-
-# read in temp data- do this later with all birds 
-data_raw <- read.csv("temp_raw.csv")
-data_filt <- read.csv("temp_filt.csv")
-
-# Calculate errors based on mismatch of dba and speed
-data_dba <- data_filt %>%
+# Calculate DBA and VEDBA
+data_filt <- read.csv("Processed/gpsdata_filtered.csv") %>% # speed-filtered data
           # calculate dba as the sum of absolute value of axial acceleration
   mutate(dba = abs(acceleration_raw_x) + abs(acceleration_raw_y) + abs(acceleration_raw_z),
-          # flag fixes with zero acceleration, unlikely
-         screen0 = ifelse(dba == 0, 1, 0),
           # calculate vedba as the sqaure root of the sum of the squared axial values
          vedba = sqrt(acceleration_raw_x^2 + acceleration_raw_y^2 + acceleration_raw_x^2),
           # calculate the mean speed between the forward and back step speed calculations
-         mSpeed = ((sSpeed + pSpeed)/2),
-          # allocate type I errors: VeDBA < 1st quartile & GPS speed > 3rd quartile (likely resultant from locational error)
-         screen1 = ifelse(vedba < 246.7 & mSpeed > 0.977, 1, 0),
-          # allocate type II errors: VeDBA > 3rd quartile & GPS speed < 1st quartile (likely resultant from a stationary behaviour),
-         screen2 = ifelse(vedba > 621.5 & mSpeed < 0.286, 1, 0),
+         mSpeed = ((sSpeed + pSpeed)/2))
+
+# Calculate 5% and 95% values for vedba and mean speed
+range <- data.frame(variables = c("vedba", "mSpeed"),
+                       lower = c(quantile(data_filt$vedba, 0.05, na.rm = TRUE)[[1]],
+                                 quantile(data_filt$mSpeed, 0.05, na.rm = TRUE)[[1]]),
+                       upper = c(quantile(data_filt$vedba, 0.95, na.rm = TRUE)[[1]],
+                                 quantile(data_filt$mSpeed, 0.95, na.rm = TRUE)[[1]]))
+                       
+# Filter data based on accelerometer and speed mismatch                  
+data_dba <- data_filt %>%
+          # flag fixes with zero acceleration, unlikely
+  mutate(screen0 = ifelse(vedba == 0, 1, 0),
+          # allocate type I errors: VeDBA < lower CI & speed > upper CI (likely resultant from location error)
+         screen1 = ifelse(vedba < range[1,2] & mSpeed > range[2,2], 1, 0),
+          # allocate type II errors: VeDBA > upper CI & speed < lower (likely resultant from a stationary behaviour),
+         screen2 = ifelse(vedba > range[1,3] & mSpeed < range[2,3], 1, 0),
           # combine errors
          error = screen0 + screen1 + screen2) %>%
-  # remove the value with ground speed >20km/h, biologically unrealistic
-  filter(ground_speed<20) %>%
-  # remove NA error values
-  filter(!is.na(error))
+  filter(error == 0)
 
-# plot dba and vedba
-ggplot(data_dba)+
-  geom_point(aes(dba, vedba))+
-  geom_smooth(aes(dba, vedba), method = "lm")
-
-# plot errors by ground_speed (calculated onboard)
-ggplot(data_dba)+
-  geom_boxplot(aes(ground_speed, group = as.factor(error), fill = as.factor(error)))
-
-# plot data cleaning to check visually
-map <- get_map(c(144.435738, -37.9000), zoom=15, maptype = "satellite")
+# Plot data cleaning to check effect of filtering
 ggmap(map)+
   # un-filtered data
-  geom_point(data=data_raw, aes(lon, lat), color="red")+
-  # path
-  geom_path(data=data_raw, aes(lon, lat), color="black")+
-  # filtered no errors
-  geom_point(data=filter(data_dba, error == 0), aes(lon, lat), color="blue")+
-  # filtered 1 error type
-  geom_point(data=filter(data_dba, error == 1), aes(lon, lat), color="yellow")+
-  # filtered 2 error types
-  geom_point(data=filter(data_dba, error == 2), aes(lon, lat), color="orange")
-    
+  geom_path(data=data_filt, aes(lon, lat), color="blue")+
+  # flagged errors
+  geom_point(data=filter(data_dba, error > 0), aes(lon, lat), color="yellow")+
+  facet_wrap(~id)
 
+# Save to file
+write.csv(data_dba, "Processed/gpsdata_filtered2.csv", row.names = FALSE)
 ```
 
-We split the data into night and day (i.e. moving versus roosting).
-
-```{r day night}
-# Calculate if time is pre/post dawn/dusk
-suntime <- getSunlightTimes(date = unique(data_raw$date),
-                            lat = -37.90,
-                            lon = 144.43,
-                            keep = c("dawn", "dusk"),
-                            tz = "Australia/Melbourne") %>%
-  subset(select = -c(lat, lon))
-
-# Append to data frame
-data_sun <- left_join(data_raw, suntime) %>%
-  mutate(tod = ifelse(time_local>dawn & time_local<dusk, "day", "night"))
-
-# Save day data
-data_day <- data_sun %>%
-  filter(tod == "day")
-
-write.csv(data_day, "Processed/gps_MR2022_day.csv", row.names = FALSE)
-
-# Save night data
-data_night <- data_sun %>%
-  filter(tod == "night")
-
-write.csv(data_night, "Processed/gps_MR2022_night.csv", row.names = FALSE)
-```
-
+This reduced the data from 577,229 rows to 523,057 i.e., a 9.385% reduction. 
 
 ## Distance
 
@@ -672,5 +641,33 @@ m5b <- glmmTMB(persistence ~ score,
                data = m5_data)
 summary(m5b)
 
+```
+
+We split the data into night and day (i.e. moving versus roosting).
+
+```{r day night}
+# Calculate if time is pre/post dawn/dusk
+suntime <- getSunlightTimes(date = unique(data_raw$date),
+                            lat = -37.90,
+                            lon = 144.43,
+                            keep = c("dawn", "dusk"),
+                            tz = "Australia/Melbourne") %>%
+  subset(select = -c(lat, lon))
+
+# Append to data frame
+data_sun <- left_join(data_raw, suntime) %>%
+  mutate(tod = ifelse(time_local>dawn & time_local<dusk, "day", "night"))
+
+# Save day data
+data_day <- data_sun %>%
+  filter(tod == "day")
+
+write.csv(data_day, "Processed/gps_MR2022_day.csv", row.names = FALSE)
+
+# Save night data
+data_night <- data_sun %>%
+  filter(tod == "night")
+
+write.csv(data_night, "Processed/gps_MR2022_night.csv", row.names = FALSE)
 ```
 
