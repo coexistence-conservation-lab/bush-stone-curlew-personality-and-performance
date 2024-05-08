@@ -1,5 +1,5 @@
 ---
-title: "p2_assays"
+title: "Bush stone-curlew behaviour and performance analyes"
 author: "Shoshana Rapley"
 date: "`r Sys.Date()`"
 output: html_document
@@ -10,71 +10,113 @@ editor_options:
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 
-#pacman::p_load(tidyverse, janitor, lubridate, SDLfilter, ggmap, amt, gganimate, sp, terra, adehabitatHR, sf, glmmTMB, adehabitatLT, wildlifeDI, gtools, performance)
+# Read in packages
+pacman::p_load(beepr, ggmap, glmmTMB, janitor, SDLfilter, solitude, suncalc, tidyverse)
 
-pacman::p_load(glmmTMB, tidyverse)
-
+# Google API key for ggmaps
 ggmap::register_google(key = "AIzaSyAH3qnqmxDATEluG8lKt2KtnHKLYJc2WaM")
-
-setwd("D:/Spring 2022 Release MR")
-
 ```
 
 # Introduction
 
-This Markdown documents pre-release assays and post-release survival and establishment metrics for translocated
-bush stone-curlews (curlews) at Mt Rothwell, Victoria. 
+This Markdown documents pre-release assays and post-release survival and establishment metrics for translocated bush stone-curlews at Mt Rothwell, Victoria. 
 
 # Post-release data
 
-Data are stored on Movebank, and were downloaded for the period 25/10/2022 to 10/05/2023. Data are cleaned to 
-remove erroneous GPS fixes. 
+Data are stored on Movebank, and were downloaded for the period 24/10/2022 (one day before the first release) to 17/4/2023 (one day after the 90-day post-release period for the latest released birds. We cleaned the data of GPS errors using the SDLfilter package, which takes user-defined speed and turning angle thresholds to determine outliers. 
 
-```{r data clean}
-
-birds <- c("Briar", "Nutmeg", "Star", "Aurora", "Robin", "Daisy",
+```{r speed filterimng}
+# List of birds in this translocation
+birds <- c("Briar", "Nutmeg", "Star", "Aurora", "Robin", 
            "Iona", "Sage", "Koda", "Brook", "Clover", "Wobbles",
            "Prem", "Rove", "Valentine", "Marmalade")
 
-# import data from movebank and filter to study birds 
-data_raw <- read.csv("movebank_20230510.csv") %>%
-  clean_names() %>%
-  rename(id = individual_local_identifier,
-         lon = location_long,
+# Import data from movebank and filter to study birds 
+data_raw <- read.csv("Input/movebank_20221019_20230417.csv") %>%
+  clean_names() %>% 
+  filter(individual_local_identifier %in% birds) %>%
+         # Time in posix format
+  mutate(DateTime = as.POSIXct(study_local_timestamp, 
+                                 "%Y-%m-%d %H:%M:%S",tz = "Australia/Melbourne"),
+         date = as.Date(DateTime, tz = "Australia/Melbourne"),
+         # Rename columns for SDLfilter
+         id = individual_local_identifier,
          lat = location_lat,
-         qi = gps_satellite_count) %>%
-  filter(id %in% birds) %>%
-  mutate(DateTime = as.POSIXct(study_local_timestamp,
-                               "%Y-%m-%d %H:%M:%S",
-                               tz = "Australia/Sydney")) %>%
-  mutate(date = date(DateTime))
+         lon = location_long,
+         qi = gps_satellite_count); beep('coin')
 
-# filter out points with a hdop >1.4
-data_hdop <- data_raw %>%
-  filter(qi>5,
-         gps_hdop<1.4) #hdop recent addition 16 jan to improve accuracy
+# Run SDLfilter for each bird with the speed thresholds calculated per bird
+data_filt <- data.frame()
 
-# filter out points using speed-based filtering
-data_filt <- data_hdop %>%
-  dupfilter() %>%
-  ddfilter_speed(vmax=4, method=2)%>%
-  rename(date_time = DateTime)
+for(i in 1:length(birds)){
+  subset <- filter(data_raw, id == birds[i])
+  vmax <- vmax(subset, prob = 0.99)
+  vmaxlp <- vmaxlp(subset, prob = 0.99)
+  temp <- ddfilter(subset, 
+                   vmax = vmax,
+                   vmaxlp = vmaxlp,
+                   qi = 5,
+                   method = 2)
+  data_filt <- rbind(data_filt, temp)
+}; beep('coin')
 
 # plot data cleaning to check visually
-map <- get_map(c(144.435738, -37.900544), zoom=14, maptype = "satellite")
+map <- get_map(c(144.435738, -37.9000), zoom=15, maptype = "satellite")
 ggmap(map)+
-  geom_point(data=data_raw, aes(lon, lat), color="red")+
-  geom_point(data=data_hdop, aes(lon, lat), color="yellow")+
-  geom_point(data=data_filt, aes(lon, lat), color="blue")
-
-# save data
-write.csv(data_filt, "movebank_20230510_clean.csv", row.names = FALSE)
+  geom_point(data=subset, aes(lon, lat), color="red")+
+  geom_point(data=temp, aes(lon, lat), color="blue")+
+  geom_path(data=temp, aes(lon, lat), color="blue")
 
 ```
 
+We then did movement-verified filtering following (Gunner *_et al._* (2022))[https://royalsocietypublishing.org/doi/10.1098/rsif.2021.0692], where the dynamic body acceleration (DBA; sum of tri-axial accelerometer data) should be in line with velocity (calculated from step distance and time from GPS fixes). Stationary points tend to contribute the most to 'jitter', so checking for real movement can help screen for outliers. 
+
+```{r MVF}
+# saving temp data im using to test this section with one bird (Briar)
+write.csv(subset, "temp_raw.csv", row.names = FALSE)
+write.csv(temp, "temp_filt.csv", row.names = FALSE)
+
+# read in temp data- do this later with all birds 
+data_raw <- read.csv("temp_raw.csv")
+data_filt <- read.csv("temp_filt.csv")
+
+# Calculate DBA for each time step
+data_dba <- temp %>%
+  mutate(dba = abs(acceleration_raw_x) + abs(acceleration_raw_y) + abs(acceleration_raw_z))
+```
+
+We split the data into night and day (i.e. moving versus roosting).
+
+```{r day night}
+# Calculate if time is pre/post dawn/dusk
+suntime <- getSunlightTimes(date = unique(data_raw$date),
+                            lat = -37.90,
+                            lon = 144.43,
+                            keep = c("dawn", "dusk"),
+                            tz = "Australia/Melbourne") %>%
+  subset(select = -c(lat, lon))
+
+# Append to data frame
+data_sun <- left_join(data_raw, suntime) %>%
+  mutate(tod = ifelse(time_local>dawn & time_local<dusk, "day", "night"))
+
+# Save day data
+data_day <- data_sun %>%
+  filter(tod == "day")
+
+write.csv(data_day, "Processed/gps_MR2022_day.csv", row.names = FALSE)
+
+# Save night data
+data_night <- data_sun %>%
+  filter(tod == "night")
+
+write.csv(data_night, "Processed/gps_MR2022_night.csv", row.names = FALSE)
+```
+
+
 ## Distance
 
-Here we calculate two distance metrics: 
+We calculated two distance metrics: 
   1) distance from release location
   2) total distance moved daily
 
