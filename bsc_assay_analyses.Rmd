@@ -45,7 +45,7 @@ data_raw <- read.csv("Input/movebank_20221019_20230417.csv") %>%
          lon = location_long,
          qi = gps_satellite_count); beep('coin')
 
-# Run SDLfilter for each bird with the speed thresholds calculated per bird
+# Run SDLfilter for each bird with the speed thresholds calculated per bird 🐢🐢🐢
 data_filt <- data.frame()
 
 for(i in 1:length(birds)){
@@ -61,12 +61,15 @@ for(i in 1:length(birds)){
 }; beep('coin')
 
 # plot data cleaning to check visually
-map <- get_map(c(144.435738, -37.9000), zoom=15, maptype = "satellite")
+map <- get_map(c(144.4400, -37.9000), zoom=15, maptype = "satellite")
 ggmap(map)+
-  geom_point(data=subset, aes(lon, lat), color="red")+
-  geom_point(data=temp, aes(lon, lat), color="blue")+
-  geom_path(data=temp, aes(lon, lat), color="blue")
+  geom_point(data=data_raw, aes(lon, lat), color="red")+
+  geom_point(data=data_filt, aes(lon, lat), color="blue")+
+  geom_path(data=data_filt, aes(lon, lat), color="blue")+
+  facet_wrap(~id)
 
+# Save to file
+write.csv(data_filt, "Processed/gpsdata_filtered.csv", row.names = FALSE)
 ```
 
 We then did movement-verified filtering following (Gunner *_et al._* (2022))[https://royalsocietypublishing.org/doi/10.1098/rsif.2021.0692], where the dynamic body acceleration (DBA; sum of tri-axial accelerometer data) should be in line with velocity (calculated from step distance and time from GPS fixes). Stationary points tend to contribute the most to 'jitter', so checking for real movement can help screen for outliers. 
@@ -80,9 +83,51 @@ write.csv(temp, "temp_filt.csv", row.names = FALSE)
 data_raw <- read.csv("temp_raw.csv")
 data_filt <- read.csv("temp_filt.csv")
 
-# Calculate DBA for each time step
-data_dba <- temp %>%
-  mutate(dba = abs(acceleration_raw_x) + abs(acceleration_raw_y) + abs(acceleration_raw_z))
+# Calculate errors based on mismatch of dba and speed
+data_dba <- data_filt %>%
+          # calculate dba as the sum of absolute value of axial acceleration
+  mutate(dba = abs(acceleration_raw_x) + abs(acceleration_raw_y) + abs(acceleration_raw_z),
+          # flag fixes with zero acceleration, unlikely
+         screen0 = ifelse(dba == 0, 1, 0),
+          # calculate vedba as the sqaure root of the sum of the squared axial values
+         vedba = sqrt(acceleration_raw_x^2 + acceleration_raw_y^2 + acceleration_raw_x^2),
+          # calculate the mean speed between the forward and back step speed calculations
+         mSpeed = ((sSpeed + pSpeed)/2),
+          # allocate type I errors: VeDBA < 1st quartile & GPS speed > 3rd quartile (likely resultant from locational error)
+         screen1 = ifelse(vedba < 246.7 & mSpeed > 0.977, 1, 0),
+          # allocate type II errors: VeDBA > 3rd quartile & GPS speed < 1st quartile (likely resultant from a stationary behaviour),
+         screen2 = ifelse(vedba > 621.5 & mSpeed < 0.286, 1, 0),
+          # combine errors
+         error = screen0 + screen1 + screen2) %>%
+  # remove the value with ground speed >20km/h, biologically unrealistic
+  filter(ground_speed<20) %>%
+  # remove NA error values
+  filter(!is.na(error))
+
+# plot dba and vedba
+ggplot(data_dba)+
+  geom_point(aes(dba, vedba))+
+  geom_smooth(aes(dba, vedba), method = "lm")
+
+# plot errors by ground_speed (calculated onboard)
+ggplot(data_dba)+
+  geom_boxplot(aes(ground_speed, group = as.factor(error), fill = as.factor(error)))
+
+# plot data cleaning to check visually
+map <- get_map(c(144.435738, -37.9000), zoom=15, maptype = "satellite")
+ggmap(map)+
+  # un-filtered data
+  geom_point(data=data_raw, aes(lon, lat), color="red")+
+  # path
+  geom_path(data=data_raw, aes(lon, lat), color="black")+
+  # filtered no errors
+  geom_point(data=filter(data_dba, error == 0), aes(lon, lat), color="blue")+
+  # filtered 1 error type
+  geom_point(data=filter(data_dba, error == 1), aes(lon, lat), color="yellow")+
+  # filtered 2 error types
+  geom_point(data=filter(data_dba, error == 2), aes(lon, lat), color="orange")
+    
+
 ```
 
 We split the data into night and day (i.e. moving versus roosting).
