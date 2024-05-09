@@ -17,7 +17,7 @@ pacman::p_load(beepr, ggmap, glmmTMB, janitor, SDLfilter, solitude, suncalc, tid
 ggmap::register_google(key = "AIzaSyAH3qnqmxDATEluG8lKt2KtnHKLYJc2WaM")
 
 # Background map Orana zones 1 and 2
-map <- get_map(c(144.4360, -37.9000), zoom=15, maptype = "satellite")
+map <- get_map(c(144.4360, -37.9000), zoom=14, maptype = "satellite")
 ```
 
 # Introduction
@@ -47,20 +47,20 @@ data_raw <- read.csv("Input/movebank_20221019_20230417.csv") %>%
          id = individual_local_identifier,
          lat = location_lat,
          lon = location_long,
-         qi = gps_satellite_count); beep('coin')
+         qi = gps_satellite_count); beep()
 ```
 
 ### Speed-based filtering
 We cleaned the data of GPS errors using the SDLfilter package, which takes user-defined speed and turning angle thresholds to determine outliers. We calculated the maximum linear and loop speeds for each individual bird, and filtered out the top 1% of speeds based on the distance to and from a point. We also removed points taken with less than 5 satellites (which results in higher GPS error). 
 
 ```{r speed filterimng}
-# Run SDLfilter for each bird with the speed thresholds calculated per bird 🐢🐢🐢
+# Run SDLfilter for each bird with the speed thresholds calculated per bird 🐢🐢
 data_filt <- data.frame()
 
 for(i in 1:length(birds)){
   subset <- filter(data_raw, id == birds[i])
-  vmax <- vmax(subset, prob = 0.99)
-  vmaxlp <- vmaxlp(subset, prob = 0.99)
+  vmax <- vmax(subset, prob = 0.98)
+  vmaxlp <- vmaxlp(subset, prob = 0.98)
   temp <- ddfilter(subset, 
                    vmax = vmax,
                    vmaxlp = vmaxlp,
@@ -77,17 +77,18 @@ ggmap(map)+
   facet_wrap(~id)
 
 # Save to file
-write.csv(data_filt, "Processed/gpsdata_filtered.csv", row.names = FALSE)
+write.csv(data_filt, "Processed/gpsdata_filtered_98.csv", row.names = FALSE)
 ```
 
-This reduced the data from x to y i.e., a z% reduction.
+For vmax 99: this reduced the data from 590,860 to y i.e., a z% reduction.
+For vmax 98: this reduced the data from 590,860 to 572,650 i.e., a 3.08% reduction.
 
 ### Accelerometer-based filtering
-Additionallt we used movement-verified filtering following (Gunner *_et al._* (2022))[https://royalsocietypublishing.org/doi/10.1098/rsif.2021.0692], where the dynamic body acceleration (DBA; sum of tri-axial accelerometer data) should be in line with velocity (calculated from step distance and time from GPS fixes). Stationary points tend to contribute the most to 'jitter', so checking for real movement can help screen for outliers. 
+Additionally we used movement-verified filtering following (Gunner *_et al._* (2022))[https://royalsocietypublishing.org/doi/10.1098/rsif.2021.0692], where the dynamic body acceleration (DBA; sum of tri-axial accelerometer data) should be in line with velocity (calculated from step distance and time from GPS fixes). Stationary points tend to contribute the most to 'jitter', so checking for real movement can help screen for outliers. 
 
 ```{r MVF}
 # Calculate DBA and VEDBA
-data_filt <- read.csv("Processed/gpsdata_filtered.csv") %>% # speed-filtered data
+data_filt <- read.csv("Processed/gpsdata_filtered_98.csv") %>% # speed-filtered data
           # calculate dba as the sum of absolute value of axial acceleration
   mutate(dba = abs(acceleration_raw_x) + abs(acceleration_raw_y) + abs(acceleration_raw_z),
           # calculate vedba as the sqaure root of the sum of the squared axial values
@@ -116,17 +117,22 @@ data_dba <- data_filt %>%
 
 # Plot data cleaning to check effect of filtering
 ggmap(map)+
+    # path
+  geom_path(data=data_raw, aes(lon, lat), color="blue")+
   # un-filtered data
-  geom_path(data=data_filt, aes(lon, lat), color="blue")+
-  # flagged errors
-  geom_point(data=filter(data_dba, error > 0), aes(lon, lat), color="yellow")+
+  geom_point(data=data_raw, aes(lon, lat), color = "red")+
+  # filtered with SDLfilter
+  geom_point(data=data_filt, aes(lon, lat), color="blue")+
+  # filtered with vedba
+  geom_point(data=data_dba, aes(lon, lat), color="yellow")+
   facet_wrap(~id)
 
 # Save to file
-write.csv(data_dba, "Processed/gpsdata_filtered2.csv", row.names = FALSE)
+write.csv(data_dba, "Processed/gpsdata_filtered_98ac.csv", row.names = FALSE)
 ```
 
-This reduced the data from 577,229 rows to 523,057 i.e., a 9.385% reduction. 
+For vmax 99: this reduced the data from 577,229 rows to 523,057 i.e., a 9.385% reduction. 
+For vmax 98: this reduced the data from 572,650 rows to 518,936 i.e., a 9.37% reduction. 
 
 ## Distance
 
