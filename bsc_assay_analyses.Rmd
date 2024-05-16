@@ -11,7 +11,7 @@ editor_options:
 knitr::opts_chunk$set(echo = TRUE)
 
 # Load packages
-pacman::p_load(adehabitatHR, amt, beepr, ggmap, ggpubr, glmmTMB, gtools, janitor,move2, progressr, SDLfilter, segclust2d, sf, solitude, suncalc, readxl, terra, tidyverse, wildlifeDI)
+pacman::p_load(adehabitatHR, amt, beepr, ggmap, ggpubr, glmmTMB, gtools, janitor, lme4, move2, progressr, performance, SDLfilter, segclust2d, sf, solitude, suncalc, survival, survminer, readxl, terra, tidyverse, wildlifeDI)
 
 # Google API key for ggmaps
 ggmap::register_google(key = "AIzaSyAH3qnqmxDATEluG8lKt2KtnHKLYJc2WaM")
@@ -1127,9 +1127,7 @@ ggplot(hr_daily)+
 
 ## Sociality
 
-WildlifeDI
-
-Note to self: version 1.0 moved from ltraj objects to move2 object. Need to update code. 
+Note to self: version 1.0 of wildlifeDI moved from ltraj objects to move2 object. Need to update code- next chunk doesn't work right now. 
 
 ```{r sociality}
 # Read in clean data 
@@ -1209,11 +1207,11 @@ write.csv(interact, "global_interactions.csv", row.names = FALSE)
 
 ```
 
-# Modelled response
+# Analysis
 
-Here I use the pre-release assays as predictors for the post-release response variables. 
+We want to know if the pre-release assays (latency to reach food, vigilance and handling reponse) can be used to predict post-release measures of performance, and thereby screen for suitable release candidates in future translocations. 
 
-## Predictor variable: latency to reach food
+## Latency to reach food
 
 Latency to reach food is how long it took each bird, in seconds, to reach a plate of food provided as part of their normal husbandry, measured from when the plate was placed on the ground until the bird took the first mouthful. 
 
@@ -1221,169 +1219,157 @@ Latency to reach food is how long it took each bird, in seconds, to reach a plat
 latency <- read_excel("Input/bsc assay data.xlsx", sheet =3) %>%
   clean_names() %>%
   filter(bird %in% birds) %>%
-  filter(date %in% c("2022-10-12 UTC", "2022-10-11 UTC"))
+  filter(date %in% c("2022-10-12", "2022-10-11")) %>%
   # Convert NAs where bird didn't reach food to maximum time elapsed
-  mutate(latency = ifelse(is.na(latency_s), 21600, latency_s)) %>%
-  select(c("date", "bird", "reach", "latency"))
+  #mutate(latency = ifelse(is.na(latency_s), 21600, latency_s)) %>%
+  select(c("date", "bird", "reach", "latency_s")) %>%
+  mutate(reach = ifelse(reach == "Yes", 1, 0)) %>%
+  rename(latency = latency_s)
 ```
 
+### Survival and persistence
 
-First, test latency to reach food as a predictor for survival
+Read in survival and persistence data. I set the maximum persistence duration to 360 days, because this is the maximum time tracked across all groups (time elapsed between release and removal of GPS devices).
 
-```{r m1}
+```{r survival}
 # Read in survival data
 survival <- read.csv("Input/survival.csv") %>%
   clean_names() %>%
-  select(c("identity", "persist")) %>%
   rename(bird = identity) %>%
-  filter(!bird=="Daisy")
+  filter(!bird %in% c("Daisy", "Star", "Wobbles")) %>%
+  mutate(start_date = as_date(start_date, format = "%d/%m/%Y"),
+         end_date = as_date(end_date, format = "%d/%m/%Y"))
 
 # Combine survival and latency data
-m1_data <- left_join(survival, latency)
+m1_data <- survival %>%
+  mutate(survived = ifelse(persist<360, 0, 1),
+         persist = ifelse(persist>360, 360, persist)) %>%
+  select(c("bird", "persist", "survived")) %>%
+  left_join(latency) %>%
+  # Allocate individual bird as factor (to use as random factor)
+  mutate(bird = as_factor(bird))
+```
 
-m1a_data <- m1_data %>%
-  group_by(bird) %>%
-  summarise(latency = mean(latency),
-            persistence = max(persistence),
-            offset = max(offset),
-            survived = min(survived))
+*Does latency to reach food predict survival?*
 
-# m1a: reach food (yes/no) and survival (yes/no)
+There are two levels of response for latency to reach food: 
+
+1) Did the bird reach the food (yes/no)
+2) How long did it take the bird to reach the food?
+
+First we look at the distribution of responses of whether they reached the food with survival. 
+
+```{r reach food}
 mosaicplot(table(m1_data$survived, m1_data$reach))
-
-m1a <- chisq.test(table(m1_data$survived, m1_data$reach))
-m1a
-
-# m1b: latency to reach food (seconds) and survival (yes/no)
-ggplot(m1a_data, aes(x= survived, y=log(latency), group=survived))+
-  geom_boxplot()+
-  theme_minimal()
-
-yes <- dplyr::filter(m1_data, survived==1)
-no <- dplyr::filter(m1_data, survived==0)
-
-t.test(yes$latency, no$latency)
-
 ```
 
-Second, test latency to reach food as a predictor for persistence 
+The birds didn't reach the food on one third of occasions, but all birds reached the food at least once (out of two trials). From here on we'll just use the time to reach the food.
 
-```{r m2}
-ggplot(m1a_data, aes(x= persistence, y=log(latency)))+
+We use a binomial family glm because the response variable (survival) is binary. I drop the NA reach values. 
+
+```{r m1a}
+m1_data <- na.omit(m1_data)
+
+# m1a: Does latency to reach food predict survival?
+ggplot(m1_data)+
+  geom_boxplot(aes(x= survived, y=log(latency), group=survived))+
+  theme_minimal()
+
+m1a <- glmmTMB(survived ~ latency,
+           data = m1_data,
+           family = binomial)
+summary(m1a)
+```
+
+There is no evidence latency predicts survival. 
+
+Ideally I should have used bird as a random factor (because some two-thirds of the birds have two latency scores), but the model wasn't able to handle this and gave me an error that "negative log-likelihood is NaN at starting parameter values". 
+
+*Does latency to reach food predict persistence?*
+
+First, we check the distribution of the response variable (persistence) to select the appropriate glm model family. 
+
+```{r persist}
+surv <- with(m1_data, Surv())
+```
+
+The persistence values are duration (e.g. zero or higher) and have a right-skewed distribution; therefore a negative binomial regression model should be suitable.
+
+```{r m1b}
+# m1b: Does latency to reach food predict persistence?
+ggplot(m1_data, aes(persist, log(latency)))+
   geom_point()+
-  geom_smooth(method=lm)
+  geom_smooth(method = "lm")+
+  theme_minimal()
 
-m2 <- glmmTMB(persistence ~ scale(I(log(latency))) + offset(scale(offset)),
-               family = gaussian,
-               data = m1_data)
+m1b <- glmmTMB(persist ~ latency,
+           data = m1_data,
+           family = nbinom2(link = "log"))
+summary(m1b)
+```
+
+No evidence that latency predicts persistence. 
+
+I also want to try using a survival analysis approach, since 'persistence' is a time-to-event response. 
+
+First I plot the survival curve to see if the hazard rate is constant over time (although this is tough with n=13).
+
+```{r m1c}
+# Add every day for survival
+birds2 <- setdiff(birds, c("Daisy", "Star", "Wobbles"))
+survival2 <- data.frame()
+
+for(i in 1:length(birds2)){
+  temp <- subset(survival, bird == birds2[i])
+
+  temp2 <- data.frame(date = as_date(temp$start_date:as_date("2024-01-10"))) %>%
+  mutate(bird = birds2[i],
+         status = ifelse(date<temp$end_date, 1, 0),
+         # Convert dates to numeric for use in Surv()
+         time = date - as_date(temp$start_date))
   
-summary(m2)
+  survival2 <- rbind(survival2, temp2)
+}
 
-performance(m2)
-
-check_model(m2)
-
-plot(m2)
+# Create a survival object 
+surv <- survfit(Surv(time, status) ~ 1, data = survival2)
+plot(surv)
+ggcoxzph(surv)
 ```
 
-Third, test latency to reach food as a predictor for average distance moved
+The hazard rate is approximately linear (i.e., constant), so we should be able to use a Cox proportional hazard model rather than a parametric survival model. 
 
-```{r m3}
 
-# read in data
-m3_data <- left_join(read.csv("distance_daily.csv"),
-                     clean_names(read.csv("latency.csv")), by = "bird") %>%
-  mutate(date.x = (as_date(date.x, format = "%d/%m/%Y"))) %>%
-  filter(!bird=="Daisy") %>%
-  mutate(latency = ifelse(is.na(latency), 21600, latency),
-         ar = as.numeric(factor(as.numeric(date.x))))
 
-m3a_data <- m3_data %>%
-  group_by(bird) %>%
-  summarise(latency = mean(latency),
-            dist = mean(dist))
 
-# visualise distance over time
 
-ggplot(m3a_data, aes(dist, log(latency)))+
-  geom_point()+
-  geom_smooth(method=lm)+
-  theme_minimal()
 
-# m3 latency and distance moved
+## Handling response
 
-m3 <- glmmTMB(log(latency) ~ scale(dist),
-              family = gaussian,
-              data = m3_data_sum)
+Handling response is an ordinal variable assigned during processing, on a scale of 1:3:
 
-summary(m3)
+1) Calm/still/log-pose
+2) Moderate/slight kicking or struggling/soft calling or beak clacking
+3) Extreme/upset/shrieking/growling
 
-```
+## Vigilance
 
-Fourth, test latency to reach food as a predictor for distance moved from the release site
+Vigilance is the proportion of time spent in vigilant behaviours (considered mutually exclusive from 'relaxed' behaviours). 
 
-```{r m4}
-# read in data
-m4_data <- left_join(read.csv("distance_release.csv"),
-                     clean_names(read.csv("latency.csv")), by = "bird")
+*Vigilant behaviours* were defined as:
 
-m4_data_sum <- left_join(read.csv("distance_release_mean.csv"),
-                     clean_names(read.csv("latency.csv")), by = "bird")
+* Alertness: standing but not relaxed, often startled into this pose from a more relaxed posture. May have a stiffer pose, holding neck extended or forward. May have flattened the feathers against the body. 
+* Alert walk: walking with the neck stiffly extended parallel wit hthe ground. Feathers either fluffed up (held erect) or slimmed against body, as opposed to held loosely. 
+* Head-bobbing: a rapid up/down movement of the head; used to communicate unease.
+* Head-tilting: craning the head to the side to look above and around; possibly to check for danger (can be done in tandem with head-bobbing).
+* Tail-wagging: a rapid side/side shake of the tail; used to communicate unease.
+* Defensive display: holding the wings outstretched; often wings are rapidly extended which gives the impression of a black and white 'flash' of plumage.
 
-# m4a: reach food (yes/no) and distance moved from release
-ggplot(m4_data_sum, aes(x=reach, y=mean_daily_dist, group=reach))+
-  geom_boxplot() +
-  theme_minimal()
+*Relaxed behaviours* were defined as:
 
-m4a <- glmmTMB(reach ~ mean + (1| date.x + bird),
-               family = binomial,
-               data = m4_data)
-
-summary(m4a)
-
-# m4b: latency to reach food and distance moved from release
-# NEED TO FIX FOR AUTOCORRELATION AMONG DAYS
-ggplot(m4_data_sum, aes(mean_daily_dist, latency))+
-  geom_point()+
-  geom_smooth(method=lm)+
-  theme_minimal()
-
-m4b <- glmmTMB(mean ~ log(latency) + (1|bird),
-               data = drop_na(m4_data))
-
-summary(m4b)
-
-```
-
-## Predictor variable: handling response
-
-Handling response is an ordinal variable assigned during processing, on a scale of 1:3,
-where 1 is calm/still, 2 is moderate/slight kicking or struggling/soft calling or beak clacking, 
-and 3 is extreme/upset/shrieking/growling
-
-First, test handling response as a predictor for survival and persistence
-
-```{r m5}
-# read in data
-m5_data <- left_join(read.csv("handling.csv"),
-                     clean_names(read.csv("survival.csv")), by = "bird") %>%
-  filter(type == "Pre") %>%
-  na.omit() %>%
-  mutate(score = ordered(score)) 
-
-# m5a: handling response and survival
-mosaicplot(table(m5_data$survived, m5_data$score))
-
-m5a <- chisq.test(table(m5_data$survived, m5_data$score))
-m5a
-
-# m5b: handling response and persistence
-ggplot(m5_data, aes(x=score, y=persistence, group=score))+
-  geom_boxplot() +
-  theme_minimal()
-
-m5b <- glmmTMB(persistence ~ score,
-               data = m5_data)
-summary(m5b)
-
-```
+* Preening: actively cleaning self (i.e., running the beak along the feathers, rearranging plumage), or scratching (e.g. the face with the toes), or stretching (e.g. extending the leg and wing).
+* Fluffing: a rapid erection and flattening of the feathers, often accompanied by a body and head shake. Often preceded by preening. 
+* Standing: relaxed pose (in the absence of vigilant behaviours as defined above), feathers loose or lightly fluffed (as opposed to erect or flat against the body).
+* Walking: stepping forward (in the absence of vigilant behaviours as defined above).
+* sitting: either on tibiotarsus or fully on the ground; includes sleeping. 
+* Eating: engaged in looking at, carrying, pecking, picking up, swallowing or breaking up food (or non food items that are being tested e.g. leaves). Can rapidly (second by second) change between eating and alertness. 
