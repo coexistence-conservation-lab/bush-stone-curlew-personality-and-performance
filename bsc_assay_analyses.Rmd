@@ -11,18 +11,24 @@ editor_options:
 knitr::opts_chunk$set(echo = TRUE)
 
 # Load packages
-pacman::p_load(adehabitatHR, amt, beepr, ggmap, ggpubr, glmmTMB, gtools, janitor, lme4, move2, progressr, performance, SDLfilter, segclust2d, sf, solitude, suncalc, survival, survminer, readxl, terra, tidyverse, wildlifeDI)
+pacman::p_load(adehabitatHR, amt, beepr, ggmap, ggpubr, glmmTMB, gtools, janitor, lme4, move2, moveHMM, progressr, performance, SDLfilter, segclust2d, sf, solitude, suncalc, survival, survminer, readr, readxl, terra, tidyterra, tidyverse, wildlifeDI)
 
 # Google API key for ggmaps
 ggmap::register_google(key = "AIzaSyAH3qnqmxDATEluG8lKt2KtnHKLYJc2WaM")
 
 # Background map Orana zones 1 and 2
-map_z13 <- get_map(c(144.4360, -37.9000), zoom=13, maptype = "satellite")
-map_z15 <- get_map(c(144.4360, -37.9000), zoom=15, maptype = "satellite")
+map_z13 <- get_map(c(144.4380, -37.9000), zoom=13, maptype = "satellite")
+map_z14 <- get_map(c(144.4380, -37.9000), zoom=14, maptype = "satellite")
+map_z15 <- get_map(c(144.4380, -37.9000), zoom=15, maptype = "satellite")
 
 # Bird list
 birds <- c("Briar", "Nutmeg", "Star", "Aurora", "Robin",
            "Iona", "Sage", "Koda", "Brook", "Clover", "Wobbles",
+           "Prem", "Rove", "Valentine", "Marmalade")
+
+# Bird list excluding disease fates (Wobbles and Star)
+birds2 <- c("Briar", "Nutmeg", "Aurora", "Robin",
+           "Iona", "Sage", "Koda", "Brook", "Clover",
            "Prem", "Rove", "Valentine", "Marmalade")
 ```
 
@@ -51,6 +57,7 @@ data_raw <- read.csv("Input/movebank_20221019_20230417.csv") %>%
          qi = gps_satellite_count); beep()
 ```
 
+### Speed/angle-based filtering
 We applied speed-based filtering using the custom function by Gunner (2023), where user defined speed-thresholds are refined using isolation forest models as a method of unsupervised anomaly  detection.
 
 Here is the function, from (Gunner (2023))[https://github.com/Richard6195/Dead-reckoning-animal-movements-in-R/blob/main/Gundog.GPS.Filter.R]
@@ -858,6 +865,307 @@ Input data: 590860 locations
 Filtered data: 587834 locations
 dupfilter removed 3026 locations (0.51% of original data)
 
+And with the gundog.gps.filter
+Input data: 587834 locations
+Filtered data: 582260
+Gundog removed 5574 locations (0.95% of original data)
+
+### Track resampling
+The duty cycle for the ornitrack-20 devices included a protocol to reduce tracking time when battery was depeted. As such, fixes were taken at 60, 300, 600, or 3600 seconds, depending on battery. We can resample the tracks to standardise the temporal resolution. Furthermore, resampling will aid in reducing GPS jitter.
+
+```{r resample test subset}
+# Read in unfiltered data with gundog outlier annotation
+data <- read_csv("Processed/GPSdata_outliers.csv", 
+                 col_select = c("id", "DateTime","lon","lat","acceleration_raw_x",
+                                "acceleration_raw_y", "acceleration_raw_z",
+                                "external_temperature", "height_above_msl", "utm_easting",
+                                "utm_northing", "utm_zone", "qi", "gps_hdop")) %>%
+  mutate(DateTime = as.POSIXct(DateTime, 
+                                 "%Y-%m-%d %H:%M:%S",tz = "Australia/Melbourne"),
+         date = as.Date(DateTime, tz = "Australia/Melbourne"))
+
+# Test subset, 1 month for Robin
+robin <- filter(data, id == "Robin" & gps_hdop <= 1.8
+                 & date %in% as_date(c(as_date("2023-03-01"):as_date("2023-03-30")))) 
+
+# Make amt track object
+robin_amt <- make_track(robin, .x = utm_easting, .y = utm_northing,
+                        .t = DateTime, )
+```
+
+
+### Movement verified filtering
+Stationary points tend to contribute the most to 'jitter', so checking for real movement can help screen for outliers. 
+
+Movement-verified filtering following (Gunner *_et al._* (2022))[https://royalsocietypublishing.org/doi/10.1098/rsif.2021.0692] where the dynamic body acceleration (DBA; sum of tri-axial accelerometer data) should be in line with velocity (calculated from step distance and time from GPS fixes). 
+
+```{r MVF test subset}
+# Read in unfiltered data with gundog outlier annotation
+data <- read_csv("Processed/GPSdata_outliers.csv", 
+                 col_select = c("id", "DateTime","lon","lat","acceleration_raw_x",
+                                "acceleration_raw_y", "acceleration_raw_z",
+                                "external_temperature", "height_above_msl", "utm_easting",
+                                "utm_northing", "utm_zone", "qi", "gps_hdop")) %>%
+  mutate(DateTime = as.POSIXct(DateTime, 
+                                 "%Y-%m-%d %H:%M:%S",tz = "Australia/Melbourne"),
+         date = as.Date(DateTime, tz = "Australia/Melbourne"))
+
+# Test subset, 1 month for Robin
+robin <- filter(data, id == "Robin" & gps_hdop <= 1.8
+                 & date %in% as_date(c(as_date("2023-03-01"):as_date("2023-03-30")))) 
+
+# Calculate speed for each displacement
+robin2 <- cbind(robin, data.frame(
+  speed_kmh = calc_speed(robin,
+                         coord.names = c("utm_easting", "utm_northing"),
+                         timecol = "DateTime",
+                         smoothed = FALSE,
+                         units = "secs"))) %>%
+  mutate(speed_ms = speed_kmh/3.6)
+
+# Plot on map with speed as colour
+ggmap(map_z15) +
+  geom_path(data = robin2, aes(lon, lat, colour = speed_kmh), inherit.aes = FALSE)+
+  scale_color_viridis_c()+
+  theme_void()
+
+# Histogram of speeds
+hist(robin2$speed_kmh)
+
+# Calculate DBA and veDBA for each fix - /1000 to convert from 0.01g to g
+robin3 <- robin2 %>% # speed-filtered data
+  # calculate dba as the sum of absolute value of axial acceleration
+  mutate(dba = ((abs(acceleration_raw_x) + abs(acceleration_raw_y) +
+                   abs(acceleration_raw_z))/1000),
+         # calculate vedba as the square root of the sum of the squared axial values
+         vedba = ((sqrt(acceleration_raw_x^2 + acceleration_raw_y^2 +
+                          acceleration_raw_x^2))/1000))
+
+# Plot on map with acceleration as colour
+ggmap(map_z15) +
+  geom_path(data = robin3, aes(lon, lat, colour = vedba), inherit.aes = FALSE)+
+  scale_color_viridis_c()+
+  theme_void()
+
+# Histogram of acceleration
+hist(robin3$vedba)
+
+# Relationship between veDBA and speed
+ggplot(robin3, aes(vedba, speed_ms))+
+  geom_point()+
+  theme_minimal()
+
+# Plot VeDBA and speed over time (for a 4 hour window)
+robin4 <- slice(robin3, 1:50)
+ggplot(robin4)+
+  geom_path(aes(DateTime, vedba))+
+  geom_path(aes(DateTime, speed_ms*10), colour = "red3")+
+  scale_y_continuous(name = "Accelerometer: veDBA (g)",
+                     sec.axis = sec_axis(trans=~./10, name="Speed m/s"))+
+  theme_minimal()
+
+# Filter data based on accelerometer and speed mismatch  
+p_acc <- 0.4 # vedba parameter
+p_sp <- 0.04 # speed parameter
+
+robin_mvf <- robin3 %>%
+         # flag fixes with zero acceleration, unlikely
+  mutate(screen0 = ifelse(dba == 0, 1, 0),
+         # allocate type I errors: VeDBA < lower CI & speed > upper CI (likely resultant from location error)
+         screen1 = ifelse(vedba < p_acc & speed_ms > p_sp, 1, 0),
+         # allocate type II errors: VeDBA > upper CI & speed < lower (likely resultant from a stationary behaviour),
+         screen2 = ifelse(vedba > p_acc & speed_ms < p_sp, 1, 0),
+         # combine errors
+         error = screen0 + screen1 + screen2)
+
+# Plot on map with MVF error as colour
+ggmap(map_z15) +
+  geom_path(data = robin_mvf, aes(lon, lat, colour = error), inherit.aes = FALSE)+
+  scale_color_viridis_c()+
+  theme_void()
+
+```
+
+
+### State-based filtering
+GPS jitter is greater during stationary movement patterns, so I'll run a 2-state state-based model to identify stationary and movement fixes, and then run differential filtering on the two states.
+
+```{r HMM test subset}
+# Read in unfiltered data with gundog outlier annotation
+data <- read_csv("Processed/GPSdata_outliers.csv", 
+                 col_select = c("id", "DateTime","lon","lat","acceleration_raw_x",
+                                "acceleration_raw_y", "acceleration_raw_z",
+                                "external_temperature", "height_above_msl", "utm_easting",
+                                "utm_northing", "utm_zone", "qi", "gps_hdop")) %>%
+  mutate(DateTime = as.POSIXct(DateTime, 
+                                 "%Y-%m-%d %H:%M:%S",tz = "Australia/Melbourne"),
+         date = as.Date(DateTime, tz = "Australia/Melbourne"))
+
+# Test subset, 1 month for Nutmeg as a moveHMM object
+robin <- filter(data, id == "Robin"
+                 & date %in% as_date(c(as_date("2023-03-01"):as_date("2023-03-30")))) %>%
+  prepData(type = "UTM", coordNames = c("utm_easting", "utm_northing")) %>%
+  filter(step < 300)
+
+# Initial parameters for gamma and von Mises distributions 
+mu0 <- c(1, 25) # step mean (two parameters: one for each state) 
+sigma0 <- c(1, 10) # step SD 
+stepPar0 <- c(mu0, sigma0) 
+
+angleMean0 <- c(pi, 0) # angle mean 
+kappa0 <-c(0.1, 1) # angle concentration 
+anglePar0 <- c(angleMean0, kappa0)
+
+## call to fitting function 
+robin_hmm <-fitHMM(robin,
+                   nbStates = 2,
+                   stepPar0 = stepPar0,
+                   anglePar0 = anglePar0)
+
+# INCOMPLETET CHUNK 
+```
+
+
+## Survival
+
+Originally, we were going to consider survival as a binary (yes/no to 1 year - 360 days to be precise, which is the minimum common denominator of tracking time from deployment to retrieval of GPS units) and persistence (duration survived, integer data). However, the risk of mortality is not actually equal for all birds across time, since (due to variations in primary moult) some were able to leave the fenced  area sooner than others, which has a much higher risk factor. To account for this, I calculate the time spent over the fence per bird, as a proxy for increased predation risk. Time spent over fence is calculated as duration track sections outside of the polygon. 
+
+First need to define the fences. 
+
+```{r MR fences}
+# Define fence polygons
+zone1 <- rbind( # clockwise
+  c(-37.897319, 144.429048), # S end of NW diagonal
+  c(-37.894066, 144.432334), # N end of NW diagonal, i.e. NW corner
+  c(-37.894749, 144.438305), # bend at main gate 
+  c(-37.894693, 144.438324), # main gate
+  c(-37.894803, 144.439214), # bend before N Z1/2 gate
+  c(-37.894718, 144.439337), # N Z1/2 gate, i.e. NE corner
+  c(-37.898143, 144.440381), # S Z1/2 gate
+  c(-37.898280, 144.440662), # Z1/btrw pen NW corner
+  c(-37.900692, 144.440368), # Z1/btrw SW corner
+  #c(-37.902573, 144.442970), # Z1/btrw SE corner
+  c(-37.902610, 144.443002), # Z1/btrw SE corner
+  #c(-37.909514, 144.439601), # Z1 SE corner
+  c(-37.909538, 144.439648), # Z1 SE corner
+  c(-37.908999, 144.434965), # Z1 southern boundary bend 1
+  c(-37.907537, 144.433359), # Z1 southern boundary bend 2
+  c(-37.905958, 144.430140), # Z1 southern boundary bend 3
+  c(-37.905486, 144.429479), # Z1 southern boundary bend 4
+  c(-37.904649, 144.427566), # Z1 SW corner
+  c(-37.897319, 144.429048)  # S end of NW diagonal
+) %>%  vect(type = "polygons", crs = "EPSG:4326") %>%
+  t() %>%
+  st_as_sf() %>%
+  cbind(data.frame(zone = "zone1"))
+
+zone2 <- rbind( #clockwise
+  c(-37.894718, 144.439337), # N Z1/2 gate, i.e. SW corner
+  c(-37.892433, 144.440236), # N boundary internal aviary/Z2 i.e. NW corner
+  c(-37.892803, 144.443374), # Z2 northern boundary bend 1
+  c(-37.893634, 144.444076), # Z2 northern boundary bend 2
+  c(-37.894585, 144.447739), # N end of Z2/Z3 boundary, i.e. NE corner
+  c(-37.896515, 144.446789), # Z2/Z3 boundary bend 1
+  c(-37.896726, 144.446099), # Z2/Z3 boundary bend 2
+  c(-37.897964, 144.445706), # Z2/Z3 boundary bend 3
+  c(-37.899960, 144.444517), # S end of Z2/Z3 boundary, i.e. SE corner
+  #c(-37.899903, 144.444270), # Z2/btrw NE corner
+  c(-37.899908, 144.444288), # Z2/btrw NE corner
+  c(-37.898280, 144.440662), # Z1/btrw pen NW corner
+  c(-37.898143, 144.440381), # S Z1/2 gate
+  c(-37.894718, 144.439337)  # N Z1/2 gate, i.e. SW corner
+) %>%  vect(type = "polygons", crs = "EPSG:4326") %>%
+  t() %>%
+  st_as_sf() %>%
+  cbind(data.frame(zone = "zone2"))
+
+aviary <- rbind( # anticlockwise
+  c(-37.894693, 144.438324), # inner main gate W end, i.e. SW corner
+  c(-37.894803, 144.439214), # bend before N Z1/2 gate
+  c(-37.894718, 144.439337), # N Z1/2 gate, i.e. SE corner
+  c(-37.892433, 144.440236), # N boundary internal aviary/Z2, i.e. NE corner
+  c(-37.892254, 144.438762), # outer main gate W end, i.e. NW corner
+  c(-37.894693, 144.438324)  # inner main gate W end, i.e. SW corner
+) %>%  vect(type = "polygons", crs = "EPSG:4326") %>%
+  t() %>%
+  st_as_sf() %>%
+  cbind(data.frame(zone = "aviary"))
+
+btrw <- rbind(
+  c(-37.898280, 144.440662), # Z1/btrw pen NW corner
+  #c(-37.899903, 144.444270), # Z2/btrw NE corner
+  c(-37.899908, 144.444288), # Z2/btrw NE corner
+  #c(-37.902573, 144.442970), # Z1/btrw SE corner
+  c(-37.902610, 144.443002), # Z1/btrw SE corner
+  c(-37.900692, 144.440368), # Z1/btrw SW corner
+  c(-37.898280, 144.440662)  # Z1/btrw pen NW corner
+) %>%  vect(type = "polygons", crs = "EPSG:4326") %>%
+  t() %>%
+  st_as_sf() %>%
+  cbind(data.frame(zone = "btrw"))
+
+zone3 <- rbind( # anticlockwise
+  c(-37.894585, 144.447739), # N end of Z2/Z3 boundary
+  c(-37.896515, 144.446789), # Z2/Z3 boundary bend 1
+  c(-37.896726, 144.446099), # Z2/Z3 boundary bend 2
+  c(-37.897964, 144.445706), # Z2/Z3 boundary bend 3
+  c(-37.899960, 144.444517), # S end of Z2/Z3 boundary, i.e. SW corner
+  c(-37.902315, 144.459277), # SE corner
+  c(-37.896942, 144.460285), # Z3 E boundary bend 1
+  c(-37.896869, 144.460432), # Z3 E boundary bend 2
+  c(-37.897357, 144.464663), # Z3 E boundary bend 3, E most point
+  c(-37.883947, 144.457228), # Z3 E boundary bend 4
+  c(-37.882432, 144.455531), # NE corner
+  c(-37.881765, 144.450057), # NW corner
+  c(-37.894585, 144.447739) # N end of Z2/Z3 boundary
+) %>%  vect(type = "polygons", crs = "EPSG:4326") %>%
+  t() %>%
+  st_as_sf() %>%
+  cbind(data.frame(zone = "zone3"))
+
+# Combine polygons
+mtr <- rbind(zone1, zone2, zone3, aviary, btrw)
+
+# Plot on map
+ggmap(map_z14) +
+  geom_spatvector(data=mtr, inherit.aes = FALSE, alpha = .4,
+                  aes(fill = zone))+
+  scale_fill_viridis_d()+
+  theme_void()
+
+# Save fence shapefiles
+st_write(mtr, "mtr_fences/mtr_fences.shp", append = FALSE)
+
+# Read in 
+mtr <- st_read("mtr_fences/mtr_fences.shp")
+```
+
+Then bring in the cleaned data and allocate points as in/out of fences. 
+
+```{r in/out fence test subset}
+# Read in clean data
+data <- read.csv("Processed/GPSdata_filtered.csv") %>%
+  mutate(DateTime = as.POSIXct(DateTime, 
+                                 "%Y-%m-%d %H:%M:%S",tz = "Australia/Melbourne"),
+         date = as.Date(DateTime, tz = "Australia/Melbourne"))
+
+# Test subset, one bird, one month
+aurora <- filter(data, id == "Aurora"
+                 & date %in% as_date(c(as_date("2023-03-29"):as_date("2023-04-29"))))
+
+# Convert points to spatial
+aurora_sp <- vect(aurora, geom = c("lon", "lat"), crs = "EPSG:4326")
+
+# Plot on map
+ggmap(map_z15) +
+  geom_spatvector(data=mtr, inherit.aes = FALSE, alpha = .4,
+                  aes(fill = zone))+
+  scale_fill_viridis_d()+
+  geom_path(data=aurora, aes(lon, lat), inherit.aes = FALSE, colour = "white")+
+  theme_void()
+```
+
+
 ## Distance
 
 We calculated two distance metrics: 
@@ -1211,21 +1519,124 @@ write.csv(interact, "global_interactions.csv", row.names = FALSE)
 
 We want to know if the pre-release assays (latency to reach food, vigilance and handling reponse) can be used to predict post-release measures of performance, and thereby screen for suitable release candidates in future translocations. 
 
-## Latency to reach food
+## Predictors
 
+### Latency
 Latency to reach food is how long it took each bird, in seconds, to reach a plate of food provided as part of their normal husbandry, measured from when the plate was placed on the ground until the bird took the first mouthful. 
 
 ```{r latency to reach food}
+# Read in and clean up latency assay data
 latency <- read_excel("Input/bsc assay data.xlsx", sheet =3) %>%
   clean_names() %>%
-  filter(bird %in% birds) %>%
+  # Select study birds
+  filter(bird %in% birds2) %>%
+  # Filter to assay dates
   filter(date %in% c("2022-10-12", "2022-10-11")) %>%
-  # Convert NAs where bird didn't reach food to maximum time elapsed
-  #mutate(latency = ifelse(is.na(latency_s), 21600, latency_s)) %>%
   select(c("date", "bird", "reach", "latency_s")) %>%
+  # Convert yes/no to 1/0
   mutate(reach = ifelse(reach == "Yes", 1, 0)) %>%
-  rename(latency = latency_s)
+  rename(latency = latency_s) %>%
+  # Add column for plotting 'did not reach'
+  mutate(label = ifelse(is.na(latency), "DNR", ""))
+
+# Plot latency by bird
+ggplot(latency) + 
+  geom_bar(aes(bird, latency, fill = as.character(date)), position = "dodge", stat = "identity")+
+  geom_text(aes(y=600, x= bird, label = label), angle = 90, vjust = -0.5)+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  labs(x= element_blank(), y = "Latency to reach food (seconds)")+
+  scale_x_discrete(guide = guide_axis(angle = 45)) +
+  scale_fill_manual(values = c("#881C00FF","#1BB6AFFF"), name = "Assay date")+
+  theme_minimal()
 ```
+
+### Handling response
+
+Handling response is an ordinal variable assigned during processing, on a scale of 1:3:
+
+1) Calm/still/log-pose
+2) Moderate/slight kicking or struggling/soft calling or beak clacking
+3) Extreme/upset/shrieking/growling
+
+```{r handling}
+# Read in handling data
+handling <- read_excel("Input/bsc assay data.xlsx", sheet = 7) %>%
+  clean_names() %>%
+  rename(bird = identity) %>%
+  # Filter to study birds
+  filter(bird %in% birds2) %>%
+  # Filter to assay dates
+  filter(date %in% c("2022-10-20"))
+
+# Plot
+ggplot(handling)+
+  geom_bar(aes(score))+
+  theme_minimal()
+```
+
+Interestingly, when there are repeat measures (post-release) the handling response stays the same; however, for now we are just interested in whether the pre-release assay values predict other post-release behaviours. 
+
+### Vigilance
+
+Vigilance is the proportion of time spent in vigilant behaviours (considered mutually exclusive from 'relaxed' behaviours). 
+
+*Vigilant behaviours* were defined as:
+
+* Alertness: standing but not relaxed, often startled into this pose from a more relaxed posture. May have a stiffer pose, holding neck extended or forward. May have flattened the feathers against the body. 
+* Alert walk: walking with the neck stiffly extended parallel wit hthe ground. Feathers either fluffed up (held erect) or slimmed against body, as opposed to held loosely. 
+* Head-bobbing: a rapid up/down movement of the head; used to communicate unease.
+* Head-tilting: craning the head to the side to look above and around; possibly to check for danger (can be done in tandem with head-bobbing).
+* Tail-wagging: a rapid side/side shake of the tail; used to communicate unease.
+* Defensive display: holding the wings outstretched; often wings are rapidly extended which gives the impression of a black and white 'flash' of plumage.
+
+*Relaxed behaviours* were defined as:
+
+* Preening: actively cleaning self (i.e., running the beak along the feathers, rearranging plumage), or scratching (e.g. the face with the toes), or stretching (e.g. extending the leg and wing).
+* Fluffing: a rapid erection and flattening of the feathers, often accompanied by a body and head shake. Often preceded by preening. 
+* Standing: relaxed pose (in the absence of vigilant behaviours as defined above), feathers loose or lightly fluffed (as opposed to erect or flat against the body).
+* Walking: stepping forward (in the absence of vigilant behaviours as defined above).
+* sitting: either on tibiotarsus or fully on the ground; includes sleeping. 
+* Eating: engaged in looking at, carrying, pecking, picking up, swallowing or breaking up food (or non food items that are being tested e.g. leaves). Can rapidly (second by second) change between eating and alertness. 
+
+Read in the video assay data and calculate the time spent vigilant as a proportion of whole time. Some videos have sections where the bird is out of frame (noted in ethogram as 'Z'), so the proportion vigilant is the full minute minus the period of Z. 
+
+```{r vigilance}
+# Read in and tidy up video assays 
+video <- read_excel("Input/bsc assay data.xlsx", sheet =4) %>%
+  clean_names() %>%
+  # Drop birds not included in study
+  filter(!bird %in% c("Daisy", "Star", "Wobbles")) %>%
+  # Drop metadata columns
+  select(-c("pen", "clip", "time", "note")) %>%
+  # Drop lines without records 
+  na.omit() %>%
+  # Convert from wide to long
+  pivot_longer(3:62, names_to = "second", values_to = "behaviour") %>%
+  # Convert seconds into numeric
+  mutate(second = as.numeric(str_remove(second, "x"))) %>%
+  # Assign vigilance to 1 and not to 0
+  mutate(vigilant = ifelse(behaviour %in% c("A","HT","HB","HBT","N","TW","D"), 1, 0))
+
+# Calculate time spent vigilant
+vigilance <- video %>%
+  group_by(bird) %>%
+  summarise(z = sum(grepl("Z", behaviour)),
+            L = length(behaviour) - z,
+            v = sum(vigilant),
+            pv = v/L)
+
+# Plot proportion of time spent vigilant by bird
+ggplot(vigilance) + 
+  geom_bar(aes(bird, pv), position = "dodge", stat = "identity")+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  labs(x= element_blank(), y = "Proportion of time spent vigilant")+
+  scale_x_discrete(guide = guide_axis(angle = 45)) +
+  theme_minimal()
+```
+
+## Responses
+
+Here we test the response variables (post-release performance) against the predictor variables (pre-release assays).
 
 ### Survival and persistence
 
@@ -1236,21 +1647,22 @@ Read in survival and persistence data. I set the maximum persistence duration to
 survival <- read.csv("Input/survival.csv") %>%
   clean_names() %>%
   rename(bird = identity) %>%
-  filter(!bird %in% c("Daisy", "Star", "Wobbles")) %>%
+  filter(bird %in% birds2) %>%
   mutate(start_date = as_date(start_date, format = "%d/%m/%Y"),
-         end_date = as_date(end_date, format = "%d/%m/%Y"))
-
-# Combine survival and latency data
-m1_data <- survival %>%
-  mutate(survived = ifelse(persist<360, 0, 1),
-         persist = ifelse(persist>360, 360, persist)) %>%
-  select(c("bird", "persist", "survived")) %>%
-  left_join(latency) %>%
-  # Allocate individual bird as factor (to use as random factor)
-  mutate(bird = as_factor(bird))
+         end_date = as_date(end_date, format = "%d/%m/%Y"),
+         survived = ifelse(persist<360, 0, 1),
+         persist = ifelse(persist>360, 360, persist))
 ```
 
+#### m1a: latency ~ survival
 *Does latency to reach food predict survival?*
+
+```{r m1}
+# Combine survival and latency data
+m1_data <- survival %>%
+  select(c("bird", "persist", "survived")) %>%
+  left_join(latency)
+```
 
 There are two levels of response for latency to reach food: 
 
@@ -1283,14 +1695,15 @@ summary(m1a)
 
 There is no evidence latency predicts survival. 
 
-Ideally I should have used bird as a random factor (because some two-thirds of the birds have two latency scores), but the model wasn't able to handle this and gave me an error that "negative log-likelihood is NaN at starting parameter values". 
+Ideally I should have used date as a random factor (because some two-thirds of the birds have two latency scores), but the model wasn't able to handle this and gave me an error that "negative log-likelihood is NaN at starting parameter values". 
 
+#### m1b: latency ~ persistence
 *Does latency to reach food predict persistence?*
 
 First, we check the distribution of the response variable (persistence) to select the appropriate glm model family. 
 
 ```{r persist}
-surv <- with(m1_data, Surv())
+hist(m1_data$persist)
 ```
 
 The persistence values are duration (e.g. zero or higher) and have a right-skewed distribution; therefore a negative binomial regression model should be suitable.
@@ -1310,11 +1723,140 @@ summary(m1b)
 
 No evidence that latency predicts persistence. 
 
+#### m2a: handling response ~ survival
+*Does handling response predict survival?*
+
+```{r m2a}
+# Handling and survival data
+m2_data <- survival %>%
+  select(c("bird", "persist", "survived")) %>%
+  left_join(handling) %>%
+  mutate(score = as_factor(score))
+
+# Does handling response predict survival?
+mosaicplot(table(m2_data$survived, m2_data$score))
+
+chisq.test(table(m2_data$survived, m2_data$score))
+```
+
+While there is no evidence for a prediction here (on the chi-squared test, keeping in mind low sample size) there are some interesting observations we can make: 1) Both birds with a handling score of 3 survived. 2) No birds with a handling score of 2 survived. Perhaps an intermediate strategy is suboptimal i.e., it's better to either commit to full camouflage or full flight, not the middle ground. Perhaps the middle ground is evidence of habituation, since both scores 1 and 3 can be considered a predator-response behaviour (flight or camouflage). 
+
+#### m2b: handling response ~ persistence
+*Does handling response predict persistence?*
+
+Since handling score is categorical, we'll use ANOVA and chi-squared to compare frequencies. 
+
+```{r m2a}
+# Does handling response predict persistence?
+ggplot(m2_data)+
+  geom_boxplot(aes(score, persist, group = score))
+  theme_minimal()
+
+m2b <- aov(persist ~ score,
+           data = m2_data)
+summary(m2b)
+```
+
+Interestingly, the persistence time for score 2 individuals is pretty long (195 & 308 days) - which contradicts my earlier thoughts about score 2 being maladaptive. Instead, it looks like there are a range of score 1 individual persistence values.
+
+Overall, there is no evidence that handling score predicts persistence. 
+
+#### m3a: vigilance ~ survival
+*Does vigilance predict survival?*
+
+We use a binomial family glm because the response variable (survival) is binary.
+
+```{r m3a}
+# Join vigilance and survival data
+m3_data <- survival %>%
+  mutate(survived = ifelse(persist<360, 0, 1),
+         persist = ifelse(persist>360, 360, persist)) %>%
+  select(c("bird", "persist", "survived")) %>%
+  left_join(vigilance)
+
+# m3a: Does vigilance predict survival?
+ggplot(m3_data)+
+  geom_boxplot(aes(survived, pv, group = survived))+
+  labs(y = "Proportion of time spent vigilant")+
+  theme_minimal()
+
+m3a <- glmmTMB(survived ~ pv,
+           data = m3_data,
+           family = binomial)
+summary(m3a)
+```
+
+#### m3b: vigilance ~ persistence
+*Does vigilance predict persistence?*
+
+As before, we use a negative binomial regression model because of the right-skewed persistence values. 
+
+```{r m3b}
+# m3b: Does vigilance predict persistence?
+ggplot(m3_data, aes(persist, pv))+
+  geom_point()+
+  geom_smooth(method = "lm")+
+  labs(y = "Proportion of time spent vigilant")+
+  theme_minimal()
+
+m3b <- glmmTMB(persist ~ pv,
+           data = m3_data,
+           family = nbinom2(link = "log"))
+summary(m3b)
+```
+
+Although the most vigilant bird (Iona) survived the longest, there is no evidence that vigilance (in assay setting), predicts persistence. 
+
+That's all of the predictors against survival/persistence. Looks like none of the metrics predicted survival. But maybe we'll be able to predict sub-lethal effects or behaviours that might influence future survival and reproduction.
+
+### Weight
+
+We did follow-up health checks at approximately 1, 3, 6 and 12 months post-release. However, not all birds were sampled at all times. 
+
+```{r weight}
+# Read in weights from health check data
+health <- read.csv("Input/healthchecks.csv") %>%
+  clean_names() %>%
+  rename(bird = identity) %>%
+  # Filter to study birds
+  filter(bird %in% birds2) %>%
+  # Drop lines of Prem post-recapture
+  filter(!row_number() %in% c(38,39)) %>%
+# Date as date
+  mutate(date = as_date(date, format = "%d/%m/%Y"))
+
+# Plot weights over time
+ggplot(health, aes(date, weight, colour = bird))+
+  geom_point()+
+  geom_line()
+  
+```
+
+We only have post-release data for half (n=7) of the birds. I don't think this is enough to do anything with. 
+
+### Distance moved
+
+There are two post-release distance metrics:
+
+1) Distance moved per day (an energetics response)
+2) Distance moved from release site (a boldness or exploitation metric)
+
+```{r distance}
+# Read in distance data
+dist_daily <- read.csv("Output/distance_daily.csv")
+dist_release <- read.csv("Output/distance_release.csv")
+```
+
+#### m4a: latency ~ distance
+*Does latency to reach food predict daily distance moved?*
+
+## Benched stuff for coming back to later
+
 I also want to try using a survival analysis approach, since 'persistence' is a time-to-event response. 
 
 First I plot the survival curve to see if the hazard rate is constant over time (although this is tough with n=13).
 
-```{r m1c}
+```{r hazard}
 # Add every day for survival
 birds2 <- setdiff(birds, c("Daisy", "Star", "Wobbles"))
 survival2 <- data.frame()
@@ -1331,45 +1873,8 @@ for(i in 1:length(birds2)){
   survival2 <- rbind(survival2, temp2)
 }
 
-# Create a survival object 
-surv <- survfit(Surv(time, status) ~ 1, data = survival2)
-plot(surv)
-ggcoxzph(surv)
+# Plot hazard rate 
+plot(survfit(Surv(time, status) ~ 1, data = survival2))
 ```
 
 The hazard rate is approximately linear (i.e., constant), so we should be able to use a Cox proportional hazard model rather than a parametric survival model. 
-
-
-
-
-
-
-## Handling response
-
-Handling response is an ordinal variable assigned during processing, on a scale of 1:3:
-
-1) Calm/still/log-pose
-2) Moderate/slight kicking or struggling/soft calling or beak clacking
-3) Extreme/upset/shrieking/growling
-
-## Vigilance
-
-Vigilance is the proportion of time spent in vigilant behaviours (considered mutually exclusive from 'relaxed' behaviours). 
-
-*Vigilant behaviours* were defined as:
-
-* Alertness: standing but not relaxed, often startled into this pose from a more relaxed posture. May have a stiffer pose, holding neck extended or forward. May have flattened the feathers against the body. 
-* Alert walk: walking with the neck stiffly extended parallel wit hthe ground. Feathers either fluffed up (held erect) or slimmed against body, as opposed to held loosely. 
-* Head-bobbing: a rapid up/down movement of the head; used to communicate unease.
-* Head-tilting: craning the head to the side to look above and around; possibly to check for danger (can be done in tandem with head-bobbing).
-* Tail-wagging: a rapid side/side shake of the tail; used to communicate unease.
-* Defensive display: holding the wings outstretched; often wings are rapidly extended which gives the impression of a black and white 'flash' of plumage.
-
-*Relaxed behaviours* were defined as:
-
-* Preening: actively cleaning self (i.e., running the beak along the feathers, rearranging plumage), or scratching (e.g. the face with the toes), or stretching (e.g. extending the leg and wing).
-* Fluffing: a rapid erection and flattening of the feathers, often accompanied by a body and head shake. Often preceded by preening. 
-* Standing: relaxed pose (in the absence of vigilant behaviours as defined above), feathers loose or lightly fluffed (as opposed to erect or flat against the body).
-* Walking: stepping forward (in the absence of vigilant behaviours as defined above).
-* sitting: either on tibiotarsus or fully on the ground; includes sleeping. 
-* Eating: engaged in looking at, carrying, pecking, picking up, swallowing or breaking up food (or non food items that are being tested e.g. leaves). Can rapidly (second by second) change between eating and alertness. 
