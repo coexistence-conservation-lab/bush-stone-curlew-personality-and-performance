@@ -11,7 +11,9 @@ editor_options:
 knitr::opts_chunk$set(echo = TRUE)
 
 # Load packages
-pacman::p_load(adehabitatHR, amt, beepr, ggmap, ggpubr, glmmTMB, gtools, janitor, lme4, move2, moveHMM, progressr, performance, SDLfilter, segclust2d, sf, solitude, suncalc, survival, survminer, readr, readxl, terra, tidyterra, tidyverse, wildlifeDI)
+devtools::install_github("pratikunterwegs/atlastools")
+
+pacman::p_load(adehabitatHR, amt, atlastools, beepr, ggmap, ggpubr, glmmTMB, gtools, janitor, lme4, move2, moveHMM, progressr, performance, SDLfilter, segclust2d, sf, solitude, suncalc, survival, survminer, readr, readxl, terra, tidyterra, tidyverse, wildlifeDI)
 
 # Google API key for ggmaps
 ggmap::register_google(key = "AIzaSyAH3qnqmxDATEluG8lKt2KtnHKLYJc2WaM")
@@ -870,10 +872,10 @@ Input data: 587834 locations
 Filtered data: 582260
 Gundog removed 5574 locations (0.95% of original data)
 
-### Track resampling
-The duty cycle for the ornitrack-20 devices included a protocol to reduce tracking time when battery was depeted. As such, fixes were taken at 60, 300, 600, or 3600 seconds, depending on battery. We can resample the tracks to standardise the temporal resolution. Furthermore, resampling will aid in reducing GPS jitter.
+### Median smoothing
+Even after speed/angle filtering, we retain some smaller-scale 'jitter'- these are challenging to remove as they lie within the bounds of realistic movement. Median resampling is a method of smoothing the track to reduce jitter. 
 
-```{r resample test subset}
+```{r smoothing test subset}
 # Read in unfiltered data with gundog outlier annotation
 data <- read_csv("Processed/GPSdata_outliers.csv", 
                  col_select = c("id", "DateTime","lon","lat","acceleration_raw_x",
@@ -888,104 +890,24 @@ data <- read_csv("Processed/GPSdata_outliers.csv",
 robin <- filter(data, id == "Robin" & gps_hdop <= 1.8
                  & date %in% as_date(c(as_date("2023-03-01"):as_date("2023-03-30")))) 
 
-# Make amt track object
-robin_amt <- make_track(robin, .x = utm_easting, .y = utm_northing,
-                        .t = DateTime, )
+# Median smoothing instead of time resampling
+robin_smooth <- atl_median_smooth(data = robin, x = "lat", y = "lon",
+                                  time = "DateTime", moving_window = 3)
+
+# Plot smoothed track over original points
+ggplot()+
+  geom_point(data = robin, aes(lon, lat))+
+  geom_path(data = robin_smooth, aes(lon, lat, colour = DateTime))+
+  scale_colour_viridis_c()+
+  theme_void()
+
+# And against satellite map
+ggmap(map_z15)+
+  geom_point(data = robin, aes(lon, lat), colour = "white", inherit.aes = FALSE)+
+  geom_path(data = robin_smooth, aes(lon, lat, colour = DateTime), inherit.aes = FALSE)+
+  scale_colour_viridis_c()+
+  theme_void()
 ```
-
-
-### Movement verified filtering
-Stationary points tend to contribute the most to 'jitter', so checking for real movement can help screen for outliers. 
-
-Movement-verified filtering following (Gunner *_et al._* (2022))[https://royalsocietypublishing.org/doi/10.1098/rsif.2021.0692] where the dynamic body acceleration (DBA; sum of tri-axial accelerometer data) should be in line with velocity (calculated from step distance and time from GPS fixes). 
-
-```{r MVF test subset}
-# Read in unfiltered data with gundog outlier annotation
-data <- read_csv("Processed/GPSdata_outliers.csv", 
-                 col_select = c("id", "DateTime","lon","lat","acceleration_raw_x",
-                                "acceleration_raw_y", "acceleration_raw_z",
-                                "external_temperature", "height_above_msl", "utm_easting",
-                                "utm_northing", "utm_zone", "qi", "gps_hdop")) %>%
-  mutate(DateTime = as.POSIXct(DateTime, 
-                                 "%Y-%m-%d %H:%M:%S",tz = "Australia/Melbourne"),
-         date = as.Date(DateTime, tz = "Australia/Melbourne"))
-
-# Test subset, 1 month for Robin
-robin <- filter(data, id == "Robin" & gps_hdop <= 1.8
-                 & date %in% as_date(c(as_date("2023-03-01"):as_date("2023-03-30")))) 
-
-# Calculate speed for each displacement
-robin2 <- cbind(robin, data.frame(
-  speed_kmh = calc_speed(robin,
-                         coord.names = c("utm_easting", "utm_northing"),
-                         timecol = "DateTime",
-                         smoothed = FALSE,
-                         units = "secs"))) %>%
-  mutate(speed_ms = speed_kmh/3.6)
-
-# Plot on map with speed as colour
-ggmap(map_z15) +
-  geom_path(data = robin2, aes(lon, lat, colour = speed_kmh), inherit.aes = FALSE)+
-  scale_color_viridis_c()+
-  theme_void()
-
-# Histogram of speeds
-hist(robin2$speed_kmh)
-
-# Calculate DBA and veDBA for each fix - /1000 to convert from 0.01g to g
-robin3 <- robin2 %>% # speed-filtered data
-  # calculate dba as the sum of absolute value of axial acceleration
-  mutate(dba = ((abs(acceleration_raw_x) + abs(acceleration_raw_y) +
-                   abs(acceleration_raw_z))/1000),
-         # calculate vedba as the square root of the sum of the squared axial values
-         vedba = ((sqrt(acceleration_raw_x^2 + acceleration_raw_y^2 +
-                          acceleration_raw_x^2))/1000))
-
-# Plot on map with acceleration as colour
-ggmap(map_z15) +
-  geom_path(data = robin3, aes(lon, lat, colour = vedba), inherit.aes = FALSE)+
-  scale_color_viridis_c()+
-  theme_void()
-
-# Histogram of acceleration
-hist(robin3$vedba)
-
-# Relationship between veDBA and speed
-ggplot(robin3, aes(vedba, speed_ms))+
-  geom_point()+
-  theme_minimal()
-
-# Plot VeDBA and speed over time (for a 4 hour window)
-robin4 <- slice(robin3, 1:50)
-ggplot(robin4)+
-  geom_path(aes(DateTime, vedba))+
-  geom_path(aes(DateTime, speed_ms*10), colour = "red3")+
-  scale_y_continuous(name = "Accelerometer: veDBA (g)",
-                     sec.axis = sec_axis(trans=~./10, name="Speed m/s"))+
-  theme_minimal()
-
-# Filter data based on accelerometer and speed mismatch  
-p_acc <- 0.4 # vedba parameter
-p_sp <- 0.04 # speed parameter
-
-robin_mvf <- robin3 %>%
-         # flag fixes with zero acceleration, unlikely
-  mutate(screen0 = ifelse(dba == 0, 1, 0),
-         # allocate type I errors: VeDBA < lower CI & speed > upper CI (likely resultant from location error)
-         screen1 = ifelse(vedba < p_acc & speed_ms > p_sp, 1, 0),
-         # allocate type II errors: VeDBA > upper CI & speed < lower (likely resultant from a stationary behaviour),
-         screen2 = ifelse(vedba > p_acc & speed_ms < p_sp, 1, 0),
-         # combine errors
-         error = screen0 + screen1 + screen2)
-
-# Plot on map with MVF error as colour
-ggmap(map_z15) +
-  geom_path(data = robin_mvf, aes(lon, lat, colour = error), inherit.aes = FALSE)+
-  scale_color_viridis_c()+
-  theme_void()
-
-```
-
 
 ### State-based filtering
 GPS jitter is greater during stationary movement patterns, so I'll run a 2-state state-based model to identify stationary and movement fixes, and then run differential filtering on the two states.
