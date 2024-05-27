@@ -9,3 +9,8 @@ Processed/gpsdata_filtered_99.csv
 Processed/gpsdata_filtered_99ac.csv
 Processed/gpsdata_filtered_98ac.csv
 Processed/GPSdata_outliers.csv
+Processed/GPSdata_clean.csv
+Processed/GPSdata_smoothed.csv
+Input/movebank/Aurora.csv
+Input/movebank/Brook.csv
+/Input/movebank

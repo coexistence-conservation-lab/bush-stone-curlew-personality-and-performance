@@ -18,18 +18,13 @@ pacman::p_load(adehabitatHR, amt, atlastools, beepr, ggmap, ggpubr, glmmTMB, gto
 # Google API key for ggmaps
 ggmap::register_google(key = "AIzaSyAH3qnqmxDATEluG8lKt2KtnHKLYJc2WaM")
 
-# Background map Orana zones 1 and 2
+# Background map MR zones 1 and 2
 map_z13 <- get_map(c(144.4380, -37.9000), zoom=13, maptype = "satellite")
 map_z14 <- get_map(c(144.4380, -37.9000), zoom=14, maptype = "satellite")
 map_z15 <- get_map(c(144.4380, -37.9000), zoom=15, maptype = "satellite")
 
-# Bird list
-birds <- c("Briar", "Nutmeg", "Star", "Aurora", "Robin",
-           "Iona", "Sage", "Koda", "Brook", "Clover", "Wobbles",
-           "Prem", "Rove", "Valentine", "Marmalade")
-
 # Bird list excluding disease fates (Wobbles and Star)
-birds2 <- c("Briar", "Nutmeg", "Aurora", "Robin",
+birds <- c("Briar", "Nutmeg", "Aurora", "Robin",
            "Iona", "Sage", "Koda", "Brook", "Clover",
            "Prem", "Rove", "Valentine", "Marmalade")
 ```
@@ -44,15 +39,14 @@ This Markdown documents pre-release assays and post-release survival and establi
 Telemetry are stored on Movebank, and were downloaded for the period 24/10/2022 (one day before the first release) to 17/4/2023 (one day after the 90-day post-release period for the latest released birds).
 
 ```{r movebank data}
-# Import data from movebank and filter to study birds 
-data_raw <- read.csv("Input/movebank_20221019_20230417.csv") %>%
-  clean_names() %>% 
-  filter(individual_local_identifier %in% birds) %>%
-         # Time in posix format
+# Import data from movebank
+data_raw <- readr::read_csv(fs::dir_ls(path = "Input/movebank")) %>%
+  clean_names() %>%
+  # Time in posix format
   mutate(DateTime = as.POSIXct(study_local_timestamp, 
                                  "%Y-%m-%d %H:%M:%S",tz = "Australia/Melbourne"),
          date = as.Date(DateTime, tz = "Australia/Melbourne"),
-         # Rename columns for SDLfilter
+  # Rename columns for SDLfilter
          id = individual_local_identifier,
          lat = location_lat,
          lon = location_long,
@@ -756,17 +750,17 @@ Gundog.GPS.Filter = function(TS, Longitude, Latitude, Drop.out = 300, Window.len
 #GPS.df = df.sub[["df"]]
 ```
 
-A test case on one bird (Aurora) was used to refine the user input threshold values until visual inspection showed good performance on reducing obvious outliers. We removed duplicate values and fixes taken with less than 4 satellites using the dupfilter from SDLfilter. 
+A test case on one bird was used to refine the user input threshold values until visual inspection showed good performance on reducing obvious outliers. We removed duplicate values and fixes taken with less than 4 satellites using the dupfilter from SDLfilter. 
 
 ```{r speed filter test}
 # Trial with one bird
-aurora <- filter(data_raw, id == "Aurora") %>%
+prem <- filter(data_raw, id == "Prem") %>%
   dupfilter(); beep()
 
 speed_filt <- Gundog.GPS.Filter(
-  TS = aurora$DateTime,
-  Longitude = aurora$lon,
-  Latitude = aurora$lat,
+  TS = prem$DateTime,
+  Longitude = prem$lon,
+  Latitude = prem$lat,
   Drop.out = 600, # grouping window
   Burst.method = "none",
   Dist.thresh = 714, #m - max distance per time window
@@ -779,7 +773,7 @@ speed_filt <- Gundog.GPS.Filter(
 
 speed_filt <- speed_filt %>%
   rename(DateTime = Timestamp) %>%
-  left_join(aurora)
+  left_join(prem)
 
 # Plot data cleaning to check effect of filtering
 ggmap(map_z13)+
@@ -792,22 +786,13 @@ ggmap(map_z13)+
              aes(Longitude, Latitude), colour = "blue")
 ```
 
-dupfilter_exact removed 0 of 96898 locations
-dupfilter_qi removed 462 of 96898 locations
-dupfilter_time removed 0 of 96436 locations
-dupfilter_space removed 189 of 96436 locations
-
-Input data: 96898 locations
-Filtered data: 96247 locations
-dupfilter removed 651 locations (0.67% of original data)
-
 We applied the speed-based filtering to all bird tracks. 
 
 ```{r speed filter}
 # Apply duplicate and qi filter with SDLfilter using default qi=4
 data_dupfilt <- dupfilter(data_raw)
 
-# Loop through all birds
+# Loop through all birds 🐢🐢🐢
 speed_filt <- data.frame()
 
 for(i in 1:length(birds)){
@@ -835,15 +820,11 @@ for(i in 1:length(birds)){
  
 }; beep()
 
-# Save to file - column for outliers
-write.csv(speed_filt, "Processed/GPSdata_outliers.csv", row.names = FALSE)
-
-# And a smaller version with minimal columns and flagged outliers removed
+# Save to file - smaller version with minimal columns and flagged outliers
 speed_filt2 <- speed_filt %>%
-  filter(Verdict_IF == "Not anomalous") %>%
-  select(c("id", "DateTime","lon","lat","acceleration_raw_x", "acceleration_raw_y", "acceleration_raw_z", "external_temperature","height_above_msl","utm_easting","utm_northing","utm_zone"))
+  select(c("id", "DateTime","lon","lat","acceleration_raw_x", "acceleration_raw_y", "acceleration_raw_z", "external_temperature","height_above_msl","utm_easting","utm_northing","utm_zone", "Verdict", "Verdict_IF"))
 
-write.csv(speed_filt2, "Processed/GPSdata_filtered.csv", row.names = FALSE)
+write.csv(speed_filt2, "Processed/GPSdata_filtered.csv")
 
 # Plot filtering by bird
 ggmap(map_z13)+
@@ -858,45 +839,46 @@ ggmap(map_z13)+
   theme_void()
 ```
 
-dupfilter_exact removed 2 of 590860 locations
-dupfilter_qi removed 2099 of 590858 locations
-dupfilter_time removed 1 of 588759 locations
-dupfilter_space removed 924 of 588758 locations
+dupfilter_exact removed 2 of 1123774 locations
+dupfilter_qi removed 2977 of 1123772 locations
+dupfilter_time removed 1 of 1120795 locations
+dupfilter_space removed 1405 of 1120794 locations
 
-Input data: 590860 locations
-Filtered data: 587834 locations
-dupfilter removed 3026 locations (0.51% of original data)
+Input data: 1123774 locations
+Filtered data: 1119389 locations
+dupfilter removed 4385 locations (0.39% of original data)
 
 And with the gundog.gps.filter
-Input data: 587834 locations
-Filtered data: 582260
-Gundog removed 5574 locations (0.95% of original data)
+Input data: 1,119,389 locations
+Filtered data: 1,108,734
+Gundog removed 10,655 locations (0.95% of original data)
 
 ### Median smoothing
 Even after speed/angle filtering, we retain some smaller-scale 'jitter'- these are challenging to remove as they lie within the bounds of realistic movement. Median resampling is a method of smoothing the track to reduce jitter. 
 
 ```{r smoothing test subset}
-# Read in unfiltered data with gundog outlier annotation
-data <- read_csv("Processed/GPSdata_outliers.csv", 
-                 col_select = c("id", "DateTime","lon","lat","acceleration_raw_x",
-                                "acceleration_raw_y", "acceleration_raw_z",
-                                "external_temperature", "height_above_msl", "utm_easting",
-                                "utm_northing", "utm_zone", "qi", "gps_hdop")) %>%
+# Read in unfiltered data with outlier annotation
+data <- read_csv("Processed/GPSdata_filtered.csv") %>% 
   mutate(DateTime = as.POSIXct(DateTime, 
                                  "%Y-%m-%d %H:%M:%S",tz = "Australia/Melbourne"),
          date = as.Date(DateTime, tz = "Australia/Melbourne"))
 
 # Test subset, 1 month for Robin
-robin <- filter(data, id == "Robin" & gps_hdop <= 1.8
-                 & date %in% as_date(c(as_date("2023-03-01"):as_date("2023-03-30")))) 
+robin <- filter(data, id == "Robin" & date %in% as_date(c(as_date("2023-03-01"):as_date("2023-03-30")))) %>%
+  filter(Verdict_IF == "Not anomalous") 
 
-# Median smoothing instead of time resampling
+# Median smoothing
 robin_smooth <- atl_median_smooth(data = robin, x = "lat", y = "lon",
                                   time = "DateTime", moving_window = 3)
 
+# And errors to plot
+error <- filter(data, id == "Robin" & date %in% as_date(c(as_date("2023-03-01"):as_date("2023-03-30")))) %>%
+  filter(!Verdict_IF == "Not anomalous") 
+  
 # Plot smoothed track over original points
 ggplot()+
   geom_point(data = robin, aes(lon, lat))+
+  geom_point(data = error, aes(lon, lat), colour = "red")+
   geom_path(data = robin_smooth, aes(lon, lat, colour = DateTime))+
   scale_colour_viridis_c()+
   theme_void()
@@ -904,48 +886,94 @@ ggplot()+
 # And against satellite map
 ggmap(map_z15)+
   geom_point(data = robin, aes(lon, lat), colour = "white", inherit.aes = FALSE)+
+  geom_point(data = error, aes(lon, lat), colour = "red")+
   geom_path(data = robin_smooth, aes(lon, lat, colour = DateTime), inherit.aes = FALSE)+
   scale_colour_viridis_c()+
   theme_void()
 ```
 
-### State-based filtering
-GPS jitter is greater during stationary movement patterns, so I'll run a 2-state state-based model to identify stationary and movement fixes, and then run differential filtering on the two states.
+Happy with that - smoothing window of three doesn't lose track verismilitude and reduced jitter. Running with all birds.
 
-```{r HMM test subset}
-# Read in unfiltered data with gundog outlier annotation
-data <- read_csv("Processed/GPSdata_outliers.csv", 
-                 col_select = c("id", "DateTime","lon","lat","acceleration_raw_x",
-                                "acceleration_raw_y", "acceleration_raw_z",
-                                "external_temperature", "height_above_msl", "utm_easting",
-                                "utm_northing", "utm_zone", "qi", "gps_hdop")) %>%
+```{r smoothing}
+# Read in unfiltered data and remove outliers
+data <- read_csv("Processed/GPSdata_filtered.csv") %>%
   mutate(DateTime = as.POSIXct(DateTime, 
                                  "%Y-%m-%d %H:%M:%S",tz = "Australia/Melbourne"),
-         date = as.Date(DateTime, tz = "Australia/Melbourne"))
+         date = as.Date(DateTime, tz = "Australia/Melbourne")) %>%
+  filter(Verdict_IF == "Not anomalous" & date < as_date("2024-01-10"))
 
-# Test subset, 1 month for Nutmeg as a moveHMM object
-robin <- filter(data, id == "Robin"
-                 & date %in% as_date(c(as_date("2023-03-01"):as_date("2023-03-30")))) %>%
-  prepData(type = "UTM", coordNames = c("utm_easting", "utm_northing")) %>%
-  filter(step < 300)
+# Median smoothing by bird
+smooth <- data.frame()
 
-# Initial parameters for gamma and von Mises distributions 
-mu0 <- c(1, 25) # step mean (two parameters: one for each state) 
-sigma0 <- c(1, 10) # step SD 
-stepPar0 <- c(mu0, sigma0) 
+for(i in 1:length(birds)){
+ subset <- filter(data, id == birds[i])
+ 
+ temp <- atl_median_smooth(data = subset, x = "lat", y = "lon",
+                                  time = "DateTime", moving_window = 3)
+ smooth <- rbind(smooth, temp)
+ 
+}; beep()
 
-angleMean0 <- c(pi, 0) # angle mean 
-kappa0 <-c(0.1, 1) # angle concentration 
-anglePar0 <- c(angleMean0, kappa0)
+# Save to file
+write.csv(smooth, "Processed/GPSdata_smoothed.csv", row.names = FALSE)
 
-## call to fitting function 
-robin_hmm <-fitHMM(robin,
-                   nbStates = 2,
-                   stepPar0 = stepPar0,
-                   anglePar0 = anglePar0)
+# Plot smoothed tracks by bird
+ggplot()+
+  geom_path(data = smooth, aes(lon, lat, colour = id))+
+  scale_colour_viridis_d()+
+  theme_void()+
+  facet_wrap(~id)
 
-# INCOMPLETET CHUNK 
 ```
+
+### Manual removal
+There are a handful of displacement outliers remaining that I'm going to remove manually based on visual identification. These are for: Briar, Koda, Prem and Robin. I will remove points where the lat/lon exceed simultaneous thresholds. 
+
+```{r manual outliers}
+# Fence outline 
+fence <- vect("mtr_fences/mtr_fences.shp")
+
+# Read in smoothed data
+smooth <- read_csv("Processed/GPSdata_smoothed.csv")
+
+# Map for visual checks (sub in bird name each time)
+ggmap(map_z15)+
+  geom_path(data=prem, aes(lon, lat), colour = "yellow", inherit.aes = FALSE)+
+  theme_minimal()
+
+# Briar
+briar <- subset(smooth, id == "Briar") %>%
+  filter(lon < 144.448) %>%
+  filter(lat < -37.892 | lon < 144.42) %>%
+  filter(lon > 144.439 | lat < -37.894)
+
+# Koda
+koda <- subset(smooth, id == "Koda") %>%
+  filter(lat < -37.892 & lon < 144.444)
+
+# Prem
+prem <- subset(smooth, id == "Prem") %>%
+  filter(lat < -37.893) %>%
+  filter(lon > 144.430 | lat < -37.897) %>%
+  filter(lon < 144.442 | lat > -37.901)
+
+# Robin
+robin <- subset(smooth, id == "Robin") %>%
+  filter(lat < -37.892) %>%
+  filter(lon < 144.448 | lat < -37.895) %>%
+  filter(lon > 144.435 | lat < -37.894) %>%
+  filter(lon > 144.429 | lat < -37.901)
+
+# Replace the 4 birds above in the smooth data
+smooth2 <- smooth %>%
+  filter(!id %in% c("Briar", "Koda", "Prem", "Robin")) %>%
+  rbind(briar, koda, prem, robin)
+
+# Write out cleaned data
+write.csv(smooth2, "Processed/GPSdata_clean.csv", row.names = FALSE)
+```
+
+
 
 
 ## Survival
@@ -1773,6 +1801,46 @@ dist_release <- read.csv("Output/distance_release.csv")
 *Does latency to reach food predict daily distance moved?*
 
 ## Benched stuff for coming back to later
+
+### HMM
+Originally did this for filtering but used smoothing instead- keeping for HMM code because the starting parameters seem okay 
+
+```{r HMM test subset}
+# Read in unfiltered data with gundog outlier annotation
+data <- read_csv("Processed/GPSdata_outliers.csv", 
+                 col_select = c("id", "DateTime","lon","lat","acceleration_raw_x",
+                                "acceleration_raw_y", "acceleration_raw_z",
+                                "external_temperature", "height_above_msl", "utm_easting",
+                                "utm_northing", "utm_zone", "qi", "gps_hdop")) %>%
+  mutate(DateTime = as.POSIXct(DateTime, 
+                                 "%Y-%m-%d %H:%M:%S",tz = "Australia/Melbourne"),
+         date = as.Date(DateTime, tz = "Australia/Melbourne"))
+
+# Test subset, 1 month for Nutmeg as a moveHMM object
+robin <- filter(data, id == "Robin"
+                 & date %in% as_date(c(as_date("2023-03-01"):as_date("2023-03-30")))) %>%
+  prepData(type = "UTM", coordNames = c("utm_easting", "utm_northing")) %>%
+  filter(step < 300)
+
+# Initial parameters for gamma and von Mises distributions 
+mu0 <- c(1, 25) # step mean (two parameters: one for each state) 
+sigma0 <- c(1, 10) # step SD 
+stepPar0 <- c(mu0, sigma0) 
+
+angleMean0 <- c(pi, 0) # angle mean 
+kappa0 <-c(0.1, 1) # angle concentration 
+anglePar0 <- c(angleMean0, kappa0)
+
+## call to fitting function 
+robin_hmm <-fitHMM(robin,
+                   nbStates = 2,
+                   stepPar0 = stepPar0,
+                   anglePar0 = anglePar0)
+
+# INCOMPLETET CHUNK 
+```
+
+### Hazard rate
 
 I also want to try using a survival analysis approach, since 'persistence' is a time-to-event response. 
 
