@@ -14,3 +14,5 @@ Processed/GPSdata_smoothed.csv
 Input/movebank/Aurora.csv
 Input/movebank/Brook.csv
 /Input/movebank
+Processed/GPSdata_clean_day.csv
+Processed/GPSdata_clean_night.csv

@@ -914,6 +914,10 @@ for(i in 1:length(birds)){
  
 }; beep()
 
+# Drop unnecessary columns
+smooth <- smooth %>%
+  select(-c("Verdict", "Verdict_IF", "date"))
+
 # Save to file
 write.csv(smooth, "Processed/GPSdata_smoothed.csv", row.names = FALSE)
 
@@ -973,8 +977,79 @@ smooth2 <- smooth %>%
 write.csv(smooth2, "Processed/GPSdata_clean.csv", row.names = FALSE)
 ```
 
+### Day/night
+Since bush stone-curlews are nocturnal, most movement will occur during sunset and sunrise. We can partition the movements by sun position. This is especially useful since most jitter is from stationary roosting points. 
+
+```{r suncalc}
+# Read in clean data
+data <- read.csv("Processed/GPSdata_clean.csv") %>%
+  mutate(DateTime = as.POSIXct(DateTime, 
+                                 "%Y-%m-%d %H:%M:%S",tz = "Australia/Melbourne"),
+         date = as.Date(DateTime, tz = "Australia/Melbourne"))
+
+# Calculate if time is pre/post dawn/dusk
+suntime <- getSunlightTimes(date = unique(data$date),
+                            lat = -37.90,
+                            lon = 144.43,
+                            keep = c("dawn", "dusk"),
+                            tz = "Australia/Melbourne") %>%
+  subset(select = -c(lat, lon)) 
+
+# Append to data frame
+data_sun <- left_join(data, suntime) %>%
+  mutate(tod = ifelse(DateTime>dawn & DateTime<dusk, "day", "night")) %>%
+  relocate(DateTime, .after = tod)
+
+ggplot(data_sun)+
+  geom_point(aes(lon, lat, colour = tod))
+
+# Save day data
+data_day <- data_sun %>%
+  filter(tod == "day") %>%
+  relocate(DateTime, .after = tod)
+
+write.csv(data_day, "Processed/GPSdata_clean_day.csv", row.names = FALSE)
+
+# Save night data
+data_night <- data_sun %>%
+  filter(tod == "night")
+
+write.csv(data_night, "Processed/GPSdata_clean_night.csv", row.names = FALSE)
+
+ggplot(data_night)+
+  geom_point(aes(lon, lat, colour = id))
+```
 
 
+### HMM
+Last, the majority of remaining jitter is during stationary periods. Here I run a hidden Markov model (HMM) to identify when the bird is stationary (e.g. resting at roost) compared to moving (real movement).  NOTE TO SELF SPLIT DAY NIGHT FIRST
+
+```{r HMM test subset}
+
+
+# Test subset, 1 month for Nutmeg as a moveHMM object
+robin <- filter(data, id == "Robin"
+                 & date %in% as_date(c(as_date("2023-03-01"):as_date("2023-03-30")))) %>%
+  mutate(vedba = ((sqrt(acceleration_raw_x^2 + acceleration_raw_y^2 + acceleration_raw_x^2))/1000)) %>%
+  prepData(type = "UTM", coordNames = c("utm_easting", "utm_northing"))
+
+# Initial parameters for gamma and von Mises distributions 
+mu0 <- c(1, 20, 100) # step mean 
+sigma0 <- c(1, 5, 20) # step SD 
+stepPar0 <- c(mu0, sigma0) 
+
+angleMean0 <- c(pi, (pi/2), 1) # angle mean 
+kappa0 <-c(0.1, 0.1, 0.1) # angle concentration 
+anglePar0 <- c(angleMean0, kappa0)
+
+## call to fitting function 
+robin_hmm <-fitHMM(robin,
+                   nbStates = 3,
+                   stepPar0 = stepPar0,
+                   anglePar0 = anglePar0,
+                   formula = ~vedba) # function of acceleration
+
+```
 
 ## Survival
 
@@ -1086,33 +1161,48 @@ ggmap(map_z14) +
 # Save fence shapefiles
 st_write(mtr, "mtr_fences/mtr_fences.shp", append = FALSE)
 
-# Read in 
-mtr <- st_read("mtr_fences/mtr_fences.shp")
 ```
 
 Then bring in the cleaned data and allocate points as in/out of fences. 
 
-```{r in/out fence test subset}
+```{r in/out fence}
 # Read in clean data
-data <- read.csv("Processed/GPSdata_filtered.csv") %>%
+data <- read.csv("Processed/GPSdata_clean.csv") %>%
   mutate(DateTime = as.POSIXct(DateTime, 
                                  "%Y-%m-%d %H:%M:%S",tz = "Australia/Melbourne"),
          date = as.Date(DateTime, tz = "Australia/Melbourne"))
 
-# Test subset, one bird, one month
-aurora <- filter(data, id == "Aurora"
-                 & date %in% as_date(c(as_date("2023-03-29"):as_date("2023-04-29"))))
-
 # Convert points to spatial
-aurora_sp <- vect(aurora, geom = c("lon", "lat"), crs = "EPSG:4326")
+data_sp <- vect(data, geom = c("lon", "lat"), crs = "EPSG:4326")
+
+# Read in fence
+fence <- vect("mtr_fences/mtr_fences.shp")
+
+# Since GPS error is around 50m going to make the 'outside' fence 50m buffer
+fence_buff <- fence %>%
+  st_as_sf() %>%
+  st_union() %>%
+  vect() %>%
+  project("EPSG:32755") %>%
+  buffer(width = 50) %>%
+  project("EPSG:4326") 
+
+# Find points outside fence
+out_sp <- mask(data_sp, fence_buff, inverse = TRUE)
 
 # Plot on map
 ggmap(map_z15) +
-  geom_spatvector(data=mtr, inherit.aes = FALSE, alpha = .4,
-                  aes(fill = zone))+
+  geom_spatvector(data=fence_buff, inherit.aes = FALSE, alpha = .4)+
   scale_fill_viridis_d()+
-  geom_path(data=aurora, aes(lon, lat), inherit.aes = FALSE, colour = "white")+
+  geom_path(data=data, aes(lon, lat), inherit.aes = FALSE, colour = "white")+
+  geom_spatvector(data=out_sp, aes(colour = id), inherit.aes = FALSE)+
   theme_void()
+
+# Convert back to data.frame
+out <- out_sp %>%
+  st_as_sf() %>%
+  st_drop_geometry()
+
 ```
 
 
@@ -1802,43 +1892,6 @@ dist_release <- read.csv("Output/distance_release.csv")
 
 ## Benched stuff for coming back to later
 
-### HMM
-Originally did this for filtering but used smoothing instead- keeping for HMM code because the starting parameters seem okay 
-
-```{r HMM test subset}
-# Read in unfiltered data with gundog outlier annotation
-data <- read_csv("Processed/GPSdata_outliers.csv", 
-                 col_select = c("id", "DateTime","lon","lat","acceleration_raw_x",
-                                "acceleration_raw_y", "acceleration_raw_z",
-                                "external_temperature", "height_above_msl", "utm_easting",
-                                "utm_northing", "utm_zone", "qi", "gps_hdop")) %>%
-  mutate(DateTime = as.POSIXct(DateTime, 
-                                 "%Y-%m-%d %H:%M:%S",tz = "Australia/Melbourne"),
-         date = as.Date(DateTime, tz = "Australia/Melbourne"))
-
-# Test subset, 1 month for Nutmeg as a moveHMM object
-robin <- filter(data, id == "Robin"
-                 & date %in% as_date(c(as_date("2023-03-01"):as_date("2023-03-30")))) %>%
-  prepData(type = "UTM", coordNames = c("utm_easting", "utm_northing")) %>%
-  filter(step < 300)
-
-# Initial parameters for gamma and von Mises distributions 
-mu0 <- c(1, 25) # step mean (two parameters: one for each state) 
-sigma0 <- c(1, 10) # step SD 
-stepPar0 <- c(mu0, sigma0) 
-
-angleMean0 <- c(pi, 0) # angle mean 
-kappa0 <-c(0.1, 1) # angle concentration 
-anglePar0 <- c(angleMean0, kappa0)
-
-## call to fitting function 
-robin_hmm <-fitHMM(robin,
-                   nbStates = 2,
-                   stepPar0 = stepPar0,
-                   anglePar0 = anglePar0)
-
-# INCOMPLETET CHUNK 
-```
 
 ### Hazard rate
 
