@@ -16,3 +16,4 @@ Input/movebank/Brook.csv
 /Input/movebank
 Processed/GPSdata_clean_day.csv
 Processed/GPSdata_clean_night.csv
+Processed/GPSdata_flagged.csv

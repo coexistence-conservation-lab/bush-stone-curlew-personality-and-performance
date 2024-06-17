@@ -23,10 +23,10 @@ map_z13 <- get_map(c(144.4380, -37.9000), zoom=13, maptype = "satellite")
 map_z14 <- get_map(c(144.4380, -37.9000), zoom=14, maptype = "satellite")
 map_z15 <- get_map(c(144.4380, -37.9000), zoom=15, maptype = "satellite")
 
-# Bird list excluding disease fates (Wobbles and Star)
+# Bird list excluding Daisy (returned to captivity) & Star (disease fate)
 birds <- c("Briar", "Nutmeg", "Aurora", "Robin",
            "Iona", "Sage", "Koda", "Brook", "Clover",
-           "Prem", "Rove", "Valentine", "Marmalade")
+           "Prem", "Rove", "Valentine", "Marmalade", "Wobbles")
 ```
 
 # Introduction
@@ -36,7 +36,7 @@ This Markdown documents pre-release assays and post-release survival and establi
 # Post-release performance
 
 ## Data Cleaning
-Telemetry are stored on Movebank, and were downloaded for the period 24/10/2022 (one day before the first release) to 17/4/2023 (one day after the 90-day post-release period for the latest released birds).
+Telemetry are stored on Movebank, and were downloaded for the period 24/10/2022 (one day before the first release) to end of deployment. 
 
 ```{r movebank data}
 # Import data from movebank
@@ -44,13 +44,22 @@ data_raw <- readr::read_csv(fs::dir_ls(path = "Input/movebank")) %>%
   clean_names() %>%
   # Time in posix format
   mutate(DateTime = as.POSIXct(study_local_timestamp, 
-                                 "%Y-%m-%d %H:%M:%S",tz = "Australia/Melbourne"),
-         date = as.Date(DateTime, tz = "Australia/Melbourne"),
+                                 "%Y-%m-%d %H:%M:%S"),
+         date = as.Date(DateTime),
   # Rename columns for SDLfilter
          id = individual_local_identifier,
          lat = location_lat,
          lon = location_long,
-         qi = gps_satellite_count); beep()
+         qi = gps_satellite_count) %>%
+  # Remove days after end of tracking period - for Marmalade whose GPS not removed
+  filter(date < "2024-01-12");  beep()
+```
+
+Summary stats of number of tracked days.
+
+```{r stats}
+summary <- data_raw %>% group_by(id) %>%
+  summarise(days = max(date)- min(date))
 ```
 
 ### Speed/angle-based filtering
@@ -789,10 +798,10 @@ ggmap(map_z13)+
 We applied the speed-based filtering to all bird tracks. 
 
 ```{r speed filter}
-# Apply duplicate and qi filter with SDLfilter using default qi=4
-data_dupfilt <- dupfilter(data_raw)
+# Apply duplicate and qi filter with SDLfilter using default qi=4 🐢
+data_dupfilt <- dupfilter(data_raw); beep()
 
-# Loop through all birds 🐢🐢🐢
+# Loop through all birds 🐢🐢
 speed_filt <- data.frame()
 
 for(i in 1:length(birds)){
@@ -820,52 +829,56 @@ for(i in 1:length(birds)){
  
 }; beep()
 
-# Save to file - smaller version with minimal columns and flagged outliers
-speed_filt2 <- speed_filt %>%
-  select(c("id", "DateTime","lon","lat","acceleration_raw_x", "acceleration_raw_y", "acceleration_raw_z", "external_temperature","height_above_msl","utm_easting","utm_northing","utm_zone", "Verdict", "Verdict_IF"))
-
-write.csv(speed_filt2, "Processed/GPSdata_filtered.csv")
-
 # Plot filtering by bird
-ggmap(map_z13)+
-  geom_path(data=speed_filt, aes(Longitude, Latitude), colour = "blue")+
+ggplot()+
+  geom_path(data=speed_filt, aes(Longitude, Latitude), colour = "black", alpha = .6)+
   geom_point(data=filter(speed_filt, Verdict_IF == "Possible outlier"),
-             aes(Longitude, Latitude), colour = "orange")+
+             aes(Longitude, Latitude), colour = "purple")+
   geom_point(data=filter(speed_filt, Verdict_IF == "Unanimous outlier"), 
-             aes(Longitude, Latitude), colour = "yellow")+
+             aes(Longitude, Latitude), colour = "red")+
   geom_point(data=filter(speed_filt, Verdict_IF == "Not anomalous"), 
-             aes(Longitude, Latitude), colour = "blue")+
+             aes(Longitude, Latitude), colour = "black")+
   facet_wrap(~id) + 
   theme_void()
+
+# Save to file - flagged outliers
+write.csv(speed_filt, "Processed/GPSdata_flagged.csv", row.names = FALSE)
+
+# Save to file - smaller version with minimal columns and removed outliers
+speed_filt2 <- speed_filt %>%
+  filter(Verdict_IF == "Not anomalous") %>%
+  select(c("id", "timestamp", "study_local_timestamp", "lon", "lat", "acceleration_raw_x", "acceleration_raw_y", "acceleration_raw_z", "external_temperature", "height_above_msl", "utm_easting", "utm_northing", "utm_zone", "ground_speed", "heading"))
+
+write.csv(speed_filt2, "Processed/GPSdata_filtered.csv", row.names = FALSE)
 ```
 
-dupfilter_exact removed 2 of 1123774 locations
-dupfilter_qi removed 2977 of 1123772 locations
-dupfilter_time removed 1 of 1120795 locations
-dupfilter_space removed 1405 of 1120794 locations
+dupfilter_exact removed 2 of 1034948 locations
+dupfilter_qi removed 2877 of 1034946 locations
+dupfilter_time removed 1 of 1032069 locations
+dupfilter_space removed 1315 of 1032068 locations
 
-Input data: 1123774 locations
-Filtered data: 1119389 locations
-dupfilter removed 4385 locations (0.39% of original data)
+Input data: 1034948 locations
+Filtered data: 1030753 locations
+dupfilter removed 4195 locations (0.41% of original data)
 
 And with the gundog.gps.filter
-Input data: 1,119,389 locations
-Filtered data: 1,108,734
-Gundog removed 10,655 locations (0.95% of original data)
+Input data: 1030753 locations
+Filtered data: 1016434
+Gundog removed 14319 locations (1.3892% of original data)
 
 ### Median smoothing
 Even after speed/angle filtering, we retain some smaller-scale 'jitter'- these are challenging to remove as they lie within the bounds of realistic movement. Median resampling is a method of smoothing the track to reduce jitter. 
 
+First a test subset. 
+
 ```{r smoothing test subset}
-# Read in unfiltered data with outlier annotation
-data <- read_csv("Processed/GPSdata_filtered.csv") %>% 
-  mutate(DateTime = as.POSIXct(DateTime, 
-                                 "%Y-%m-%d %H:%M:%S",tz = "Australia/Melbourne"),
-         date = as.Date(DateTime, tz = "Australia/Melbourne"))
+# Read in filtered data
+data <- read_csv("Processed/GPSdata_filtered.csv") %>%
+  mutate(datetime = as.POSIXct(study_local_timestamp, "%Y-%m-%d %H:%M:%S"),
+         date = as.Date(datetime))
 
 # Test subset, 1 month for Robin
-robin <- filter(data, id == "Robin" & date %in% as_date(c(as_date("2023-03-01"):as_date("2023-03-30")))) %>%
-  filter(Verdict_IF == "Not anomalous") 
+robin <- filter(data, id == "Robin" & date %in% as_date(c(as_date("2023-03-01"):as_date("2023-03-30"))))
 
 # Median smoothing
 robin_smooth <- atl_median_smooth(data = robin, x = "lat", y = "lon",
@@ -897,10 +910,8 @@ Happy with that - smoothing window of three doesn't lose track verismilitude and
 ```{r smoothing}
 # Read in unfiltered data and remove outliers
 data <- read_csv("Processed/GPSdata_filtered.csv") %>%
-  mutate(DateTime = as.POSIXct(DateTime, 
-                                 "%Y-%m-%d %H:%M:%S",tz = "Australia/Melbourne"),
-         date = as.Date(DateTime, tz = "Australia/Melbourne")) %>%
-  filter(Verdict_IF == "Not anomalous" & date < as_date("2024-01-10"))
+  mutate(datetime = as.POSIXct(study_local_timestamp, "%Y-%m-%d %H:%M:%S"),
+         date = as.Date(datetime))
 
 # Median smoothing by bird
 smooth <- data.frame()
@@ -909,41 +920,41 @@ for(i in 1:length(birds)){
  subset <- filter(data, id == birds[i])
  
  temp <- atl_median_smooth(data = subset, x = "lat", y = "lon",
-                                  time = "DateTime", moving_window = 3)
+                                  time = "datetime", moving_window = 3)
  smooth <- rbind(smooth, temp)
  
 }; beep()
 
-# Drop unnecessary columns
-smooth <- smooth %>%
-  select(-c("Verdict", "Verdict_IF", "date"))
-
-# Save to file
-write.csv(smooth, "Processed/GPSdata_smoothed.csv", row.names = FALSE)
-
 # Plot smoothed tracks by bird
 ggplot()+
-  geom_path(data = smooth, aes(lon, lat, colour = id))+
+  geom_path(data = smooth, aes(lon, lat))+
   scale_colour_viridis_d()+
   theme_void()+
   facet_wrap(~id)
 
+# Save to file
+write.csv(smooth, "Processed/GPSdata_smoothed.csv", row.names = FALSE)
 ```
 
 ### Manual removal
-There are a handful of displacement outliers remaining that I'm going to remove manually based on visual identification. These are for: Briar, Koda, Prem and Robin. I will remove points where the lat/lon exceed simultaneous thresholds. 
+There are a handful of displacement outliers remaining that I'm going to remove manually based on visual identification. I will remove points where the lat/lon exceed simultaneous thresholds. 
 
 ```{r manual outliers}
-# Fence outline 
-fence <- vect("mtr_fences/mtr_fences.shp")
-
 # Read in smoothed data
 smooth <- read_csv("Processed/GPSdata_smoothed.csv")
 
 # Map for visual checks (sub in bird name each time)
-ggmap(map_z15)+
-  geom_path(data=prem, aes(lon, lat), colour = "yellow", inherit.aes = FALSE)+
+ggmap(map_z14)+
+  geom_path(data = subset(smooth, id == "Valentine"), aes(lon, lat), colour = "yellow", inherit.aes = FALSE)+
   theme_minimal()
+
+# Marmalade
+marma <- subset(smooth, id == "Marmalade") %>%
+  filter(lon < 144.445)
+
+# Nutmeg
+nutmeg <- subset(smooth, id == "Nutmeg") %>%
+  filter(lat < -37.8915)
 
 # Briar
 briar <- subset(smooth, id == "Briar") %>%
@@ -953,7 +964,8 @@ briar <- subset(smooth, id == "Briar") %>%
 
 # Koda
 koda <- subset(smooth, id == "Koda") %>%
-  filter(lat < -37.892 & lon < 144.444)
+  filter(lat < -37.892 & lon < 144.444) %>%
+  filter(lat > -37.91)
 
 # Prem
 prem <- subset(smooth, id == "Prem") %>%
@@ -965,91 +977,29 @@ prem <- subset(smooth, id == "Prem") %>%
 robin <- subset(smooth, id == "Robin") %>%
   filter(lat < -37.892) %>%
   filter(lon < 144.448 | lat < -37.895) %>%
-  filter(lon > 144.435 | lat < -37.894) %>%
-  filter(lon > 144.429 | lat < -37.901)
+  filter(lon > 144.438 | lat < -37.894) %>%
+  filter(lon > 144.429 | lat < -37.901) %>%
+  filter(lon > 144.425)
 
 # Replace the 4 birds above in the smooth data
 smooth2 <- smooth %>%
-  filter(!id %in% c("Briar", "Koda", "Prem", "Robin")) %>%
-  rbind(briar, koda, prem, robin)
+  filter(!id %in% c("Marmalade", "Nutmeg", "Briar", "Koda", "Prem", "Robin")) %>%
+  rbind(marma, nutmeg, briar, koda, prem, robin)
+
+# Plot cleaned tracks by bird
+ggplot()+
+  geom_path(data = smooth2, aes(lon, lat))+
+  scale_colour_viridis_d()+
+  theme_void()+
+  facet_wrap(~id)
 
 # Write out cleaned data
 write.csv(smooth2, "Processed/GPSdata_clean.csv", row.names = FALSE)
 ```
 
-### Day/night
-Since bush stone-curlews are nocturnal, most movement will occur during sunset and sunrise. We can partition the movements by sun position. This is especially useful since most jitter is from stationary roosting points. 
-
-```{r suncalc}
-# Read in clean data
-data <- read.csv("Processed/GPSdata_clean.csv") %>%
-  mutate(DateTime = as.POSIXct(DateTime, 
-                                 "%Y-%m-%d %H:%M:%S",tz = "Australia/Melbourne"),
-         date = as.Date(DateTime, tz = "Australia/Melbourne"))
-
-# Calculate if time is pre/post dawn/dusk
-suntime <- getSunlightTimes(date = unique(data$date),
-                            lat = -37.90,
-                            lon = 144.43,
-                            keep = c("dawn", "dusk"),
-                            tz = "Australia/Melbourne") %>%
-  subset(select = -c(lat, lon)) 
-
-# Append to data frame
-data_sun <- left_join(data, suntime) %>%
-  mutate(tod = ifelse(DateTime>dawn & DateTime<dusk, "day", "night")) %>%
-  relocate(DateTime, .after = tod)
-
-ggplot(data_sun)+
-  geom_point(aes(lon, lat, colour = tod))
-
-# Save day data
-data_day <- data_sun %>%
-  filter(tod == "day") %>%
-  relocate(DateTime, .after = tod)
-
-write.csv(data_day, "Processed/GPSdata_clean_day.csv", row.names = FALSE)
-
-# Save night data
-data_night <- data_sun %>%
-  filter(tod == "night")
-
-write.csv(data_night, "Processed/GPSdata_clean_night.csv", row.names = FALSE)
-
-ggplot(data_night)+
-  geom_point(aes(lon, lat, colour = id))
-```
-
-
-### HMM
-Last, the majority of remaining jitter is during stationary periods. Here I run a hidden Markov model (HMM) to identify when the bird is stationary (e.g. resting at roost) compared to moving (real movement).  NOTE TO SELF SPLIT DAY NIGHT FIRST
-
-```{r HMM test subset}
-
-
-# Test subset, 1 month for Nutmeg as a moveHMM object
-robin <- filter(data, id == "Robin"
-                 & date %in% as_date(c(as_date("2023-03-01"):as_date("2023-03-30")))) %>%
-  mutate(vedba = ((sqrt(acceleration_raw_x^2 + acceleration_raw_y^2 + acceleration_raw_x^2))/1000)) %>%
-  prepData(type = "UTM", coordNames = c("utm_easting", "utm_northing"))
-
-# Initial parameters for gamma and von Mises distributions 
-mu0 <- c(1, 20, 100) # step mean 
-sigma0 <- c(1, 5, 20) # step SD 
-stepPar0 <- c(mu0, sigma0) 
-
-angleMean0 <- c(pi, (pi/2), 1) # angle mean 
-kappa0 <-c(0.1, 0.1, 0.1) # angle concentration 
-anglePar0 <- c(angleMean0, kappa0)
-
-## call to fitting function 
-robin_hmm <-fitHMM(robin,
-                   nbStates = 3,
-                   stepPar0 = stepPar0,
-                   anglePar0 = anglePar0,
-                   formula = ~vedba) # function of acceleration
-
-```
+Input smoothed data: 1016434
+After manual cleaning: 1015862
+Removed: 572 (0.056% original data)
 
 ## Survival
 
@@ -1069,9 +1019,7 @@ zone1 <- rbind( # clockwise
   c(-37.898143, 144.440381), # S Z1/2 gate
   c(-37.898280, 144.440662), # Z1/btrw pen NW corner
   c(-37.900692, 144.440368), # Z1/btrw SW corner
-  #c(-37.902573, 144.442970), # Z1/btrw SE corner
   c(-37.902610, 144.443002), # Z1/btrw SE corner
-  #c(-37.909514, 144.439601), # Z1 SE corner
   c(-37.909538, 144.439648), # Z1 SE corner
   c(-37.908999, 144.434965), # Z1 southern boundary bend 1
   c(-37.907537, 144.433359), # Z1 southern boundary bend 2
@@ -1094,7 +1042,6 @@ zone2 <- rbind( #clockwise
   c(-37.896726, 144.446099), # Z2/Z3 boundary bend 2
   c(-37.897964, 144.445706), # Z2/Z3 boundary bend 3
   c(-37.899960, 144.444517), # S end of Z2/Z3 boundary, i.e. SE corner
-  #c(-37.899903, 144.444270), # Z2/btrw NE corner
   c(-37.899908, 144.444288), # Z2/btrw NE corner
   c(-37.898280, 144.440662), # Z1/btrw pen NW corner
   c(-37.898143, 144.440381), # S Z1/2 gate
@@ -1118,9 +1065,7 @@ aviary <- rbind( # anticlockwise
 
 btrw <- rbind(
   c(-37.898280, 144.440662), # Z1/btrw pen NW corner
-  #c(-37.899903, 144.444270), # Z2/btrw NE corner
   c(-37.899908, 144.444288), # Z2/btrw NE corner
-  #c(-37.902573, 144.442970), # Z1/btrw SE corner
   c(-37.902610, 144.443002), # Z1/btrw SE corner
   c(-37.900692, 144.440368), # Z1/btrw SW corner
   c(-37.898280, 144.440662)  # Z1/btrw pen NW corner
@@ -1166,11 +1111,9 @@ st_write(mtr, "mtr_fences/mtr_fences.shp", append = FALSE)
 Then bring in the cleaned data and allocate points as in/out of fences. 
 
 ```{r in/out fence}
-# Read in clean data
+# Read in clean data 🐢
 data <- read.csv("Processed/GPSdata_clean.csv") %>%
-  mutate(DateTime = as.POSIXct(DateTime, 
-                                 "%Y-%m-%d %H:%M:%S",tz = "Australia/Melbourne"),
-         date = as.Date(DateTime, tz = "Australia/Melbourne"))
+  mutate(datetime = as.POSIXct(datetime)); beep()
 
 # Convert points to spatial
 data_sp <- vect(data, geom = c("lon", "lat"), crs = "EPSG:4326")
@@ -1188,7 +1131,7 @@ fence_buff <- fence %>%
   project("EPSG:4326") 
 
 # Find points outside fence
-out_sp <- mask(data_sp, fence_buff, inverse = TRUE)
+out_sp <- mask(data_sp, fence_buff, inverse = TRUE); beep()
 
 # Plot on map
 ggmap(map_z15) +
@@ -1891,6 +1834,161 @@ dist_release <- read.csv("Output/distance_release.csv")
 *Does latency to reach food predict daily distance moved?*
 
 ## Benched stuff for coming back to later
+
+### HMM
+
+
+```{r HMM test subset}
+# Read in cleaned data prepare moveHMM object
+data <- read.csv("Processed/GPSdata_clean.csv") %>%
+  mutate(DateTime = as.POSIXct(DateTime, 
+                                 "%Y-%m-%d %H:%M:%S",tz = "Australia/Melbourne"),
+         date = as.Date(DateTime, tz = "Australia/Melbourne")) %>%
+  prepData(type = "UTM", coordNames = c("utm_easting", "utm_northing"))
+
+# Test subset, 1 month for Robin
+robin <- filter(data, id == "Robin" & date %in% as_date(c(as_date("2023-03-01"):as_date("2023-03-30")))) %>%
+  mutate(vedba = ((sqrt(acceleration_raw_x^2 + acceleration_raw_y^2 + acceleration_raw_x^2))/1000))
+
+# 3 state model
+## Initial parameters for gamma and von Mises distributions
+### Step lengths
+mu0 <- c(0,5, 20, 100) # step mean 
+sigma0 <- c(1, 5, 20) # step SD 
+stepPar0 <- c(mu0, sigma0) 
+#### Angle concentrations
+angleMean0 <- c(pi, (pi/2), 0) # angle mean 
+kappa0 <-c(0.3, 0.1, 0.2) # angle concentration 
+anglePar0 <- c(angleMean0, kappa0)
+
+## call to fitting function 
+robin_hmm3 <-fitHMM(robin,
+                   nbStates = 3,
+                   stepPar0 = stepPar0,
+                   anglePar0 = anglePar0);beep()
+
+# 4 state model
+## Initial parameters for gamma and von Mises distributions
+### Step lengths
+mu0 <- c(1, 5, 20, 100) # step mean 
+sigma0 <- c(1, 1, 5, 20) # step SD 
+stepPar0 <- c(mu0, sigma0) 
+#### Angle concentrations
+angleMean0 <- c(pi, pi, (pi/2), 0) # angle mean 
+kappa0 <-c(0.2, 0.2, 0.1, 0.2) # angle concentration 
+anglePar0 <- c(angleMean0, kappa0)
+
+## call to fitting function 
+robin_hmm4 <-fitHMM(robin,
+                   nbStates = 4,
+                   stepPar0 = stepPar0,
+                   anglePar0 = anglePar0);beep()
+
+```
+
+Run on all birds and compare a 3 and 4 state model
+
+```{r HMM}
+# Read in cleaned data prepare moveHMM object
+data <- read.csv("Processed/GPSdata_clean.csv") %>%
+  mutate(DateTime = as.POSIXct(DateTime, 
+                                 "%Y-%m-%d %H:%M:%S",tz = "Australia/Melbourne"),
+         date = as.Date(DateTime, tz = "Australia/Melbourne")) %>%
+  rename(ID = id) %>%
+  prepData(type = "UTM", coordNames = c("utm_easting", "utm_northing")) %>%
+  filter(step < 500); beep()
+
+# Plot to check
+plot(data, compact = TRUE)
+
+# 3 state model
+## Initial parameters for gamma and von Mises distributions
+### Step lengths
+mu0 <- c(0.5, 20, 100) # step mean 
+sigma0 <- c(1, 5, 20) # step SD 
+zeromass0 <- c(0.1, 0.1, 0.05) # step zero mass
+stepPar0 <- c(mu0, sigma0, zeromass0) 
+#### Angle concentrations
+angleMean0 <- c(pi, (pi/2), 0) # angle mean 
+kappa0 <-c(0.3, 0.1, 0.2) # angle concentration 
+anglePar0 <- c(angleMean0, kappa0)
+
+## call to fitting function 
+hmm3 <-fitHMM(data,
+              nbStates = 3,
+              stepPar0 = stepPar0,
+              anglePar0 = anglePar0);beep()
+
+# 4 state model
+## Initial parameters for gamma and von Mises distributions
+### Step lengths
+mu0 <- c(1, 5, 20, 100) # step mean 
+sigma0 <- c(1, 1, 5, 20) # step SD 
+stepPar0 <- c(mu0, sigma0) 
+#### Angle concentrations
+angleMean0 <- c(pi, pi, (pi/2), 0) # angle mean 
+kappa0 <-c(0.2, 0.2, 0.1, 0.2) # angle concentration 
+anglePar0 <- c(angleMean0, kappa0)
+
+## call to fitting function 
+hmm4 <-fitHMM(data,
+              nbStates = 4,
+              stepPar0 = stepPar0,
+              anglePar0 = anglePar0);beep()
+```
+
+
+
+### Day/night
+Since bush stone-curlews are nocturnal, most movement will occur during sunset and sunrise. We can partition the movements by sun position. This is especially useful since most jitter is from stationary roosting points. 
+
+```{r suncalc}
+# Read in clean data
+data <- read.csv("Processed/GPSdata_clean.csv") %>%
+  mutate(DateTime = as.POSIXct(DateTime, 
+                                 "%Y-%m-%d %H:%M:%S",tz = "Australia/Melbourne"),
+         date = as.Date(DateTime, tz = "Australia/Melbourne"))
+
+# Calculate if time is pre/post dawn/dusk
+suntime <- getSunlightTimes(date = unique(data$date),
+                            lat = -37.90,
+                            lon = 144.43,
+                            keep = c("sunrise", "sunset"),
+                            tz = "Australia/Melbourne") %>%
+  subset(select = -c(lat, lon)) 
+
+# Append to data frame
+data_sun <- left_join(data, suntime) %>%
+  mutate(tod = ifelse(DateTime>sunrise & DateTime<sunset, "day", "night")) %>%
+  relocate(DateTime, .after = tod) %>%
+  na.omit()
+
+# Plot to check
+ggplot(data_sun)+
+  geom_point(aes(lon, lat, colour = tod))
+
+# Marmalade issues?
+marma <- filter(data_sun, id == "Marmalade")
+
+marmasp <- vect(marma, geom = c("lon", "lat"), crs = "EPSG:4326")
+
+marma_out <- marma %>%
+  mutate(infence = is.related(marmasp, fence, "intersects")) %>%
+  filter(infence == FALSE)
+
+# Save day data
+data_day <- data_sun %>%
+  filter(tod == "day") %>%
+  relocate(DateTime, .after = tod)
+
+write.csv(data_day, "Processed/GPSdata_clean_day.csv", row.names = FALSE)
+
+# Save night data
+data_night <- data_sun %>%
+  filter(tod == "night")
+
+write.csv(data_night, "Processed/GPSdata_clean_night.csv", row.names = FALSE)
+```
 
 
 ### Hazard rate

@@ -1,17 +1,17 @@
-Release year,Location,Identity,ABBBS,Band,Alive,Start date,Fate,End date,Persist
-2022,MTR,Aurora,111-11202,Yellow I8,U,25/10/2022,GPS missing,29/08/2023,308
-2022,MTR,Robin,111-11203,Blue K4,Y,25/10/2022,TBC probably predated,5/03/2024,497
-2022,MTR,Daisy,111-11213,Green J5,Y,25/10/2022,"Recaptured, return captivity",27/10/2022,2
-2022,MTR,Nutmeg,111-11201,Blue K5,Y,29/10/2022,Predated,8/01/2024,436
-2022,MTR,Star,200-18823,Yellow I7,N,29/10/2022,Disease,7/11/2022,9
-2022,MTR,Briar,200-18829,Blue K7,N,29/10/2022,Predated,11/03/2023,133
-2022,MTR,Koda,200-18824,Blue K9,Y,14/12/2022,Alive (GPS removed),11/01/2024,393
-2022,MTR,Iona,200-18826,Yellow I0,Y,14/12/2022,Alive (GPS removed),11/01/2024,393
-2022,MTR,Sage,200-18827,Green J8,N,14/12/2022,Predated,27/06/2023,195
-2022,MTR,Prem,100-97873,Blue K2,Y,12/01/2023,"Recaptured, vet treatment",14/03/2023,61
-2022,MTR,Rove,200-18820,Yellow I1,N,12/01/2023,Predated,16/03/2023,63
-2022,MTR,Valentine,200-18828,Green J4,Y,13/01/2023,Alive (GPS removed),11/01/2024,363
-2022,MTR,Marmalade,200-18830,Yellow I3,Y,13/01/2023,Alive (GPS on),11/01/2024,363
-2022,MTR,Clover,100-97872,Blue K8,N,16/01/2023,Predated,29/04/2023,103
-2022,MTR,Wobbles,200-18831,Yellow I2,N,16/01/2023,Disease,24/01/2023,8
-2022,MTR,Brook,200-18834,Green J9,N,16/01/2023,Predated,3/06/2023,138
+Release year,Location,Identity,ABBBS,Band,Alive,Start date,Fate,Fate additional,End date,Persist,90 days,1 year
+2022,MTR,Aurora,111-11202,Yellow I8,U,25/10/2022,Unknown,GPS missing,29/08/2023,308,TRUE,FALSE
+2022,MTR,Robin,111-11203,Blue K4,Y,25/10/2022,TBC,"Over fence, presumed fox",5/03/2024,497,TRUE,TRUE
+2022,MTR,Nutmeg,111-11201,Blue K5,Y,29/10/2022,Predated,BOP little river,8/01/2024,436,TRUE,TRUE
+2022,MTR,Star,200-18823,Yellow I7,N,29/10/2022,Disease,,7/11/2022,9,FALSE,FALSE
+2022,MTR,Briar,200-18829,Blue K7,N,29/10/2022,Predated,Fox little river,11/03/2023,133,TRUE,FALSE
+2022,MTR,Koda,200-18824,Blue K9,Y,14/12/2022,Alive (GPS removed),,11/01/2024,393,TRUE,TRUE
+2022,MTR,Iona,200-18826,Yellow I0,Y,14/12/2022,Alive (GPS removed),,11/01/2024,393,TRUE,TRUE
+2022,MTR,Sage,200-18827,Green J8,N,14/12/2022,Predated,Fox little river,27/06/2023,195,TRUE,FALSE
+2022,MTR,Prem,100-97873,Blue K2,Y,12/01/2023,"Recaptured, vet treatment",Fox little river,14/03/2023,61,FALSE,FALSE
+2022,MTR,Rove,200-18820,Yellow I1,N,12/01/2023,Predated,Fox little river,16/03/2023,63,FALSE,FALSE
+2022,MTR,Valentine,200-18828,Green J4,Y,13/01/2023,Alive (GPS removed),,11/01/2024,363,TRUE,TRUE
+2022,MTR,Marmalade,200-18830,Yellow I3,Y,13/01/2023,Alive (GPS on),,11/01/2024,363,TRUE,TRUE
+2022,MTR,Clover,100-97872,Blue K8,N,16/01/2023,Predated,Fox little river,29/04/2023,103,TRUE,FALSE
+2022,MTR,Wobbles,200-18831,Yellow I2,N,16/01/2023,Predated,BOP zone 1,24/01/2023,8,FALSE,FALSE
+2022,MTR,Brook,200-18834,Green J9,N,16/01/2023,Predated,BOP zone 1,3/06/2023,138,TRUE,FALSE
+2022,MTR,Daisy,111-11213,Green J5,Y,25/10/2022,"Recaptured, return captivity",,27/10/2022,2,NA,NA
