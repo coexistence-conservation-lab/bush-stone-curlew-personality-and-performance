@@ -1001,9 +1001,9 @@ Input smoothed data: 1016434
 After manual cleaning: 1015862
 Removed: 572 (0.056% original data)
 
-## Survival
+## Time over fence
 
-Originally, we were going to consider survival as a binary (yes/no to 1 year - 360 days to be precise, which is the minimum common denominator of tracking time from deployment to retrieval of GPS units) and persistence (duration survived, integer data). However, the risk of mortality is not actually equal for all birds across time, since (due to variations in primary moult) some were able to leave the fenced  area sooner than others, which has a much higher risk factor. To account for this, I calculate the time spent over the fence per bird, as a proxy for increased predation risk. Time spent over fence is calculated as duration track sections outside of the polygon. 
+Originally, we were going to consider survival as a binary (yes/no to 90 days and 1 year - 360 days to be precise, which is the minimum common denominator of tracking time from deployment to retrieval of GPS units) and persistence (duration survived, integer data). However, the risk of mortality is not actually equal for all birds across time, since (due to variations in primary moult) some were able to leave the fenced  area sooner than others, which has a much higher risk factor. To account for this, I calculate the time spent over the fence per bird, as a proxy for increased predation risk. Time spent over fence is calculated as duration track sections outside of the polygon. 
 
 First need to define the fences. 
 
@@ -1121,23 +1121,27 @@ data_sp <- vect(data, geom = c("lon", "lat"), crs = "EPSG:4326")
 # Read in fence
 fence <- vect("mtr_fences/mtr_fences.shp")
 
-# Since GPS error is around 50m going to make the 'outside' fence 50m buffer
+# Since GPS error is up to 120m going to make the 'outside' fence buffer
 fence_buff <- fence %>%
   st_as_sf() %>%
   st_union() %>%
   vect() %>%
   project("EPSG:32755") %>%
-  buffer(width = 50) %>%
+  buffer(width = 120) %>%
   project("EPSG:4326") 
 
 # Find points outside fence
-out_sp <- mask(data_sp, fence_buff, inverse = TRUE); beep()
+out_sp <- mask(data_sp, fence_buff, inverse = TRUE) %>%
+  # Filter out errors on the southern fenceline and at the roost in northern Z2
+  erase(ext(144.425, 144.435, -37.91, -37.902)) %>%
+  erase(ext(144.44, 144.45, -37.894, -37.890)) %>%
+  # Filter out single erroneous Aurora point
+  filter(!id == "Aurora")
 
 # Plot on map
-ggmap(map_z15) +
+ggmap(map_z14) +
   geom_spatvector(data=fence_buff, inherit.aes = FALSE, alpha = .4)+
   scale_fill_viridis_d()+
-  geom_path(data=data, aes(lon, lat), inherit.aes = FALSE, colour = "white")+
   geom_spatvector(data=out_sp, aes(colour = id), inherit.aes = FALSE)+
   theme_void()
 
@@ -1146,6 +1150,55 @@ out <- out_sp %>%
   st_as_sf() %>%
   st_drop_geometry()
 
+# Summarise
+out_sum <- out %>% group_by(id) %>%
+  summarise(np = length(id),
+            first_out = as_date(min(date)),
+            last_out = as_date(max(date)),
+            days = length(unique(date))) %>%
+  # Add row for Sage who died out but so few points it was filtered out
+  rbind(data.frame(
+    id = "Sage",
+    np = NA,
+    first_out = as_date("2023-06-27"),
+    last_out = as_date("2023-06-27"),
+    days = 1 
+  )) %>%
+  # Add a row for Clover who died right near the front gate
+    rbind(data.frame(
+    id = "Clover",
+    np = NA,
+    first_out = as_date("2023-04-29"),
+    last_out = as_date("2023-04-29"),
+    days = 1 
+  )) %>%
+  # Lastly, a row for Nutmeg who died at Ford, but no tracking data to there
+      rbind(data.frame(
+    id = "Nutmeg",
+    np = NA,
+    first_out = as_date("2024-01-07"),
+    last_out = as_date("2024-01-07"),
+    days = 1 
+  ))
+```
+
+They actually all spend very few days over the fence except Marmalade. Many of the over fence mortalities die on their first or second day out. Also no points for Sage over the fence - mortality must have been immediately after going over.
+How many days post-release are they going over?
+
+```{r over fence days}
+# Read in survival data
+survival <- read.csv("Input/survival.csv") %>%
+  clean_names() %>%
+  rename(id = identity) %>%
+  filter(id %in% birds) %>%
+  mutate(start_date = as_date(start_date, format = "%d/%m/%Y"),
+         end_date = as_date(end_date, format = "%d/%m/%Y")) %>%
+  select(c(id, start_date, end_date, to_360))
+
+# Join over fence and survival
+out_sum2 <- left_join(out_sum, survival) %>%
+  mutate(days_to_out = first_out - start_date) %>%
+  mutate(days_out_to_dead = ifelse(to_360 == "TRUE", NA, end_date - first_out))
 ```
 
 
@@ -1160,10 +1213,8 @@ This gives an indication of the bird's propensity to explore the release site an
 
 ```{r distance from release}
 # Read in clean data
-data <- read.csv("Processed/GPSdata_filtered.csv") %>%
-  mutate(DateTime = as.POSIXct(DateTime, 
-                                 "%Y-%m-%d %H:%M:%S",tz = "Australia/Melbourne"),
-         date = as.Date(DateTime, tz = "Australia/Melbourne"))
+data <- read.csv("Processed/GPSdata_clean.csv") %>%
+  mutate(datetime = as.POSIXct(datetime)); beep()
 
 # Specify the coords of each GPS fix
 coords <- as.matrix(cbind(data$utm_easting, data$utm_northing))
@@ -1192,10 +1243,10 @@ ggplot(dist_day)+
 
 # Add release group information
 group <- data.frame(
-  id = c("Aurora", "Robin", "Briar", "Nutmeg", "Star",
+  id = c("Aurora", "Robin", "Briar", "Nutmeg", 
          "Iona", "Sage", "Koda",
          "Prem", "Rove", "Brook", "Clover", "Wobbles", "Valentine", "Marmalade"),
-  release = c(rep("October",5), rep("December",3), rep("January",7)))
+  release = c(rep("October",4), rep("December",3), rep("January",7)))
 
 dist_day <- left_join(dist_day, group)        
 
@@ -1206,7 +1257,8 @@ ggplot(dist_day)+
   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
   scale_x_date(date_labels = "%b %Y", breaks = "1 month")+
   labs(x= element_blank(), y = "Mean daily distance from release location (m)")+
-  scale_color_manual(values = c("#881C00FF","#1BB6AFFF","#172869FF"))
+  scale_color_manual(values = c("#881C00FF","#1BB6AFFF","#172869FF"))+
+  theme(axis.text.x = element_text(angle = 90))
 
 # And summary stats for whole period
 dist_summary <- dist_day %>%
@@ -1222,16 +1274,13 @@ write.csv(dist_summary, "Output/distance_release_mean.csv", row.names = FALSE)
 Total distance moved daily gives an indication of the activity levels of the bird.
 
 ```{r distance moved daily}
-# Read in clean data & reformat dates and times to posixct
-data <- read.csv("Processed/GPSdata_filtered.csv") %>%
-  mutate(DateTime = as.POSIXct(DateTime, 
-                                 "%Y-%m-%d %H:%M:%S",tz = "Australia/Melbourne"),
-         date = as.Date(DateTime, tz = "Australia/Melbourne")) %>%
-  na.omit()
+# Read in clean data
+data <- read.csv("Processed/GPSdata_clean.csv") %>%
+  mutate(datetime = as.POSIXct(datetime)); beep()
 
 # Convert to track (AMT format)
 track <- make_track(data, .x = utm_easting,.y= utm_northing,
-                    .t= DateTime, id = id) %>%
+                    .t= datetime, id = id) %>%
   nest(data = -"id")
 
 # Loop through distance per day per bird 🐢
@@ -1251,16 +1300,13 @@ for (i in 1:length(birds)){
     
     out <- data.frame(dist= cum_dist(t)/1000,
                       bird = track$id[[i]],
-                      date = dates[j])
+                      date = as_date(dates[j]))
     
     print(out)
     
     dist <- rbind.data.frame(dist, out)
     
   }}; beep()
-
-dist <- dist %>%
-  mutate(date = as_date(date))
 
 # Plot distance moved per day, smoothed and coloured by individual
 ggplot(dist)+
@@ -1273,10 +1319,10 @@ ggplot(dist)+
 
 # Add release group information
 group <- data.frame(
-  bird = c("Aurora", "Robin", "Briar", "Nutmeg", "Star",
+  bird = c("Aurora", "Robin", "Briar", "Nutmeg",
          "Iona", "Sage", "Koda",
          "Prem", "Rove", "Brook", "Clover", "Wobbles", "Valentine", "Marmalade"),
-  release = c(rep("October",5), rep("December",3), rep("January",7)))
+  release = c(rep("October",4), rep("December",3), rep("January",7)))
 
 dist <- left_join(dist, group)  
 
@@ -1287,7 +1333,8 @@ ggplot(dist)+
   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
   scale_x_date(date_labels = "%b %Y", breaks = "1 month")+
   labs(x= element_blank(), y = "Total daily distance moved (km)")+
-  scale_color_manual(values = c("#881C00FF","#1BB6AFFF","#172869FF"))
+  scale_color_manual(values = c("#881C00FF","#1BB6AFFF","#172869FF"))+
+  theme(axis.text.x = element_text(angle = 90))
 
 # and as an average over the study period
 dist_summary <- dist %>% 
@@ -1305,11 +1352,8 @@ Core 50% KUD and full 90% KUD home range using kernel utilisation density.
 
 ```{r home range}
 # Read in clean data
-data <- read.csv("Processed/GPSdata_filtered.csv") %>%
-  mutate(DateTime = as.POSIXct(DateTime, 
-                                 "%Y-%m-%d %H:%M:%S",tz = "Australia/Melbourne"),
-         date = as.Date(DateTime, tz = "Australia/Melbourne")) %>%
-  na.omit()
+data <- read.csv("Processed/GPSdata_clean.csv") %>%
+  mutate(datetime = as.POSIXct(datetime)); beep()
 
 # Convert GPS fixes to spatial points data frame
 locs <- SpatialPointsDataFrame(coordinates(
@@ -1340,36 +1384,36 @@ hr_50ll <- spTransform(hr_50, CRS("EPSG:4326")) %>% #transform to lat lon
 ## 90% kud
 ggmap(map_z15)+
   geom_sf(data=hr_90ll, aes(fill=id), alpha = .7, inherit.aes = FALSE) +
-  scale_fill_viridis_d()
+  scale_fill_viridis_d()+
+  theme_void()
 
 ## 50% kud
 ggmap(map_z15)+
   geom_sf(data=hr_50ll, aes(fill=id), alpha = .7, inherit.aes = FALSE) +
-  scale_fill_viridis_d()
+  scale_fill_viridis_d()+
+  theme_void()
 
 # save results
 hr <- data.frame(bird = hr_90@data$id,
                  kud90 = hr_90@data$area,
                  kud50 = hr_50@data$area)
+
 write.csv(hr, "Output/hr_area.csv", row.names = FALSE)
 ```
 
 And daily 90% home range
 
 ```{r home range daily}
-# read in clean data
-data <- read.csv("Processed/GPSdata_filtered.csv")  %>%
-  mutate(DateTime = as.POSIXct(DateTime, 
-                                 "%Y-%m-%d %H:%M:%S",tz = "Australia/Melbourne"),
-         date = as.Date(DateTime, tz = "Australia/Melbourne")) %>%
-  na.omit()
+# Read in clean data
+data <- read.csv("Processed/GPSdata_clean.csv") %>%
+  mutate(datetime = as.POSIXct(datetime)); beep()
 
 # convert GPS fixes to spatial points data frame
 locs <- SpatialPointsDataFrame(coordinates(
   cbind(data$utm_easting, data$utm_northing)),
   data = data)
 
-# loop through birds and days for 90% KUD 🐢🐢
+# loop through birds and days for 90% KUD 🐢🐢🐢 expect 5-8 hours
 dates <- unique(locs$date)
 
 hr_daily <- data.frame()
@@ -1384,7 +1428,7 @@ for (i in 1:length(birds)){
     kud <- kernelUD(points[,1], h="href", grid=1000, extent = 5) %>% 
       getverticeshr(percent = 90) %>%
       st_as_sf() %>%
-      mutate(date = dates[j]) %>%
+      mutate(date = as_date(dates[j])) %>%
       st_drop_geometry()
 
     print(head(kud, n= 1L))
@@ -1402,7 +1446,8 @@ ggplot(hr_daily)+
   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
   scale_x_date(date_labels = "%b %Y", breaks = "1 month")+
   labs(x= element_blank(), y = "Daily 90% KDE home range (ha)")+
-  scale_color_viridis_d()
+  scale_color_viridis_d()+
+  theme(axis.text.x = element_text(angle = 90))
 
 # And individual box plots
 ggplot(hr_daily)+
