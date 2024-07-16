@@ -11,7 +11,7 @@ editor_options:
 knitr::opts_chunk$set(echo = TRUE)
 
 # Load packages
-pacman::p_load(beepr, ggpubr, glmmTMB, janitor, performance, readxl, sjPlot, survival, tidyverse)
+pacman::p_load(beepr, ggpubr, janitor, performance, readxl, sjPlot, survival, tidyverse)
 
 # Bird list excluding Daisy (returned to captivity) & Star (disease fate)
 birds <- c("Briar", "Nutmeg", "Aurora", "Robin",
@@ -247,7 +247,7 @@ ggplot(prop_behav) +
   theme(panel.grid.minor = element_blank())
 
 # Check distribution of behaviours
-hist(data$alert)
+hist(prop_behav$alert)
 ```
 
 Interestingly, the amount of time spent 'alert' (yellows and greens) seems (visually at least) inversely related to the amount of time spent eating (aqua), rather than cutting in to the time spent resting (purples). 
@@ -356,6 +356,8 @@ anova(m1a, test = "F")
 check_model(m1a)
 ```
 
+The best predictor for survival to 90-days was weight (significant), followed by latency (marginally significant). 
+
 ```{r m1b}
 # m1b: What predicts survival to 1 year?
 m1b <- glm(to_360 ~ sqrt(latency) + alert + as.factor(score) + as.factor(sex) + weight + 
@@ -365,6 +367,20 @@ m1b <- glm(to_360 ~ sqrt(latency) + alert + as.factor(score) + as.factor(sex) + 
 anova(m1b, test = "F")
 check_model(m1b)
 ```
+
+The best predictor for survival to 1-year was sex (significant), followed by handling score (significant). 
+
+Interestingly, the predictors differed by time period - highlighting the importance of monitoring duration and also the different survival pressures between short and mid term post-release. 
+
+Since behaviour (the 'alert' metric) didn't predict survival to either time period, I won't investigate this further. Which is a shame since it was the most time consuming metric to create (around 60 hours)! At least this might reduce the effort future practitioners need to go to. 
+
+## Weight and survival
+
+⚠️ to do
+
+## Sex and survival
+
+⚠️ to do
 
 ## Latency and survival
 The relationship between reaching food and survival was not significant in either time period.
@@ -471,112 +487,16 @@ Perhaps an intermediate strategy is sub-optimal i.e., it's better to either comm
 
 While latency to reach food better predicted survival to 90-days, handling response better predicted survival to 1-year. As discussed earlier, perhaps that is because these assay approaches measure different traits. I think latency may be related to resource acquisition while handling may be related to anti-predator response. 
 
-*Does handling response predict persistence?*
-
-```{r m3c}
-# Does handling response predict persistence?
-## Violin plot
-ggplot(data, aes(score, persist, group = score))+
-  geom_violin()+
-  geom_point(size = 2)+
-  theme_minimal()+
-  labs(x= "Handling Response", 
-       y = "Post-release persistence (days)")+
-  theme_minimal()+
-  theme(panel.grid.minor = element_blank())
-
-## ANOVA to test whether score is a good predictor of persistence (Gamma for persistence right skew)
-m3c <- glm(persist ~ score,
-           data = data, 
-           family = Gamma(link = "log"))
-summary(m3c)
-check_model(m3c)
-
-## Predictions
-predict(m2c, newdata = data.frame(score = c(1,2,3)), type = "response")
-```
-
-Score isn't a good predictor of persistence. However, all the score 3 birds survive the full monitoring period. 
-
-Interestingly, the persistence time for score 2 individuals is pretty long (195 & 308 days) - which contradicts my earlier thoughts about score 2 being maladaptive. Indeed, the mean and predicted survival for score 2 is higher than that of score 1. 
+Interestingly, the persistence for score 2 individuals is pretty long (195 & 308 days) - which contradicts my earlier thoughts about score 2 being maladaptive. 
 
 Overall, there is weak evidence that handling score predicts persistence. In the context of adaptive management (the same as for the latency score), I would use this information to inform management until better information can be gathered. That is, preferentially release score 3 birds when risk and uncertainty are high. I would not release score 2 birds during a pilot study, but perhaps they can be used later in a reintroduction program. 
 
-## Behaviour and survival
-
-
-*Does behaviour predict survival to 90-days post-release?*
-
-```{r m3a}
-# m3a: Does behaviour predict survival to 90 days?
-## Violin plot
-ggplot(data, aes(x= to_90, y= alert, group = to_90))+
-  geom_violin()+
-  geom_point(size = 2)+
-  labs(x= "Survival to 90-days post-release", 
-       y = "Proportion of time spent alert")+
-  theme_minimal()+
-  theme(panel.grid.minor = element_blank())+
-  scale_x_continuous(breaks = c(0,1), labels = c(FALSE, TRUE))
-
-## Logistic regression with binomial family testing all combos
-m3a <- lm(to_90 ~ A + HB + HT + TW + E + P + alert,
-           data = data,
-           family = binomial())
-summary(m3a)
-```
-
-No evidence that behaviour predicts survival to 90-days post-release. 
-
-### m3b: behaviour ~ survival (1 year)
-*Does behaviour predict survival to 1-year post-release?*
-
-```{r m3b}
-# m3b: Does behaviour predict survival to 1 year?
-## Violin plot
-ggplot(data, aes(x= to_360, y= alert, group = to_360))+
-  geom_violin()+
-  geom_point(size = 2)+
-  labs(x= "Survival to 1-year post-release", 
-       y = "Proportion of time spent alert")+
-  theme_minimal()+
-  theme(panel.grid.minor = element_blank())+
-  scale_x_continuous(breaks = c(0,1), labels = c(FALSE, TRUE))
-
-## Logistic regression with binomial family testing all combos
-m3b <- lm(to_360 ~ A + HB + HT + TW + E + P + alert,
-           data = data,
-           family = binomial())
-summary(m3b)
-```
-
-No evidence that assay behaviour predicts survival to 1-year post-release. 
-
-### m3c: behaviour ~ persistence
-*Does behaviour predict persistence?*
-
-As before, we use a negative binomial regression model because of the right-skewed persistence values. 
-
-```{r m3c}
-# m3c: Does behaviour predict persistence?
-## Box Plot
-ggplot(data, aes(persist, alert))+
-  geom_point()+
-  geom_smooth(method = "lm")+
-  labs(y = "Proportion of time spent alert")+
-  theme_minimal()+
-  theme(panel.grid.minor = element_blank())
-
-## Logistic regression with binomial family
-m3c <- glm(persist ~ alert,
-           data = data,
-           family = Gamma(link = "log"))
-summary(m3c)
-```
-
-No relationship. Although most vigilant bird (Iona) survived full time period. 
+In summary, handling score is a better predictor of long-term surival (1 year) than latency. 
 
 ## Survival analysis
+
+⚠️ incomplete
+
 To look at persistence I am using a survival analysis approach, since 'persistence' is a time-to-event response. 
 
 First I plot the survival curve to see if the hazard rate is constant over time (although this is tough with n=13).
