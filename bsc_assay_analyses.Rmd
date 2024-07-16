@@ -7,7 +7,7 @@ editor_options:
   chunk_output_type: console
 ---
 
-```{r setup, echo = FALSE}
+```{r setup}
 knitr::opts_chunk$set(echo = TRUE)
 
 # Load packages
@@ -21,7 +21,7 @@ birds <- c("Briar", "Nutmeg", "Aurora", "Robin",
 
 # Introduction
 
-This Markdown documents analyses done as part of paper '<insert name here>', a chapter of my doctoral studies. 
+This Markdown documents analyses done as part of paper 'captive behaviour predicts translocation performance in bush stone-curlews', a chapter of my doctoral studies. 
 
 The aim of this study is to test whether we can predict post-release performance using pre-release assays in translocated bush stone-curlews. If true, we might be able screen for suitable release candidates in future translocations. 
 
@@ -33,11 +33,11 @@ Two individuals were excluded from analyses. Daisy was returned to captivity aft
 
 We undertook pre-release assays prior to release of the birds. The pre-release assays were:
 
-* Latency to reach food
-* Handling response
-* Vigilance
+a) Latency to reach food
+b) Handling response (in-hand)
+c) Filmed behaviour
 
-These took place in their home aviaires in the captive breeding colony and were filmed with trail cameras.
+Predictors A and C were filmed in their home aviaries with trail cameras. Predictor B was scored during routine handling.
 
 ## Latency
 
@@ -51,14 +51,12 @@ latency <- read_excel("Input/bsc assay data.xlsx", sheet =3) %>%
   filter(bird %in% birds) %>%
   # Filter to assay dates
   filter(date %in% c("2022-10-12", "2022-10-11")) %>%
-  select(c("date", "bird", "reach", "latency_s")) %>%
+  dplyr::select(c("date", "bird", "reach", "latency_s")) %>%
   # Convert yes/no to 1/0
   mutate(reach = ifelse(reach == "Yes", 1, 0)) %>%
   rename(latency = latency_s) %>%
   # Add column for plotting 'did not reach'
-  mutate(label = ifelse(is.na(latency), "DNR", "")) %>%
-  # Convert latency NAs to zeros
-  mutate(latency = ifelse(is.na(latency), 0, latency))
+  mutate(label = ifelse(is.na(latency), "DNR", ""))
 
 # Plot latency by bird
 ggplot(latency) + 
@@ -69,14 +67,17 @@ ggplot(latency) +
   labs(x= element_blank(), y = "Latency to reach food (seconds)")+
   scale_x_discrete(guide = guide_axis(angle = 45)) +
   scale_fill_manual(values = c("#881C00FF","#1BB6AFFF"), name = "Assay date")+
-  theme_minimal()
+  theme_minimal()+
+  theme(panel.grid.minor = element_blank())
 ```
 
-We need to account for repeat measures but due to low sample size we cannot use bird as a random factor (model convergence issues when tested). So instead, we are going to use the mean latency.
+We need to account for repeat measures but due to low sample size we cannot use bird as a random factor (model convergence issues when tested). So instead, we are going to use the mean latency. The birds didn't reach the food on one third of occasions, but all birds reached the food at least once (out of two trials).
 
 ```{r mean latency}
 # Calculate mean latency by bird
-mlatency <- latency %>% group_by(bird) %>%
+mlatency <- latency %>% 
+  na.omit() %>%
+  group_by(bird) %>%
   summarise(latency = mean(latency))
 
 # Plot mean latency by bird
@@ -86,8 +87,21 @@ ggplot(mlatency) +
   labs(x= element_blank(), y = "Mean latency to reach food (seconds)")+
   scale_x_discrete(guide = guide_axis(angle = 45)) +
   scale_fill_manual(values = c("#881C00FF","#1BB6AFFF"), name = "Assay date")+
-  theme_minimal()
+  theme_minimal()+
+  theme(panel.grid.minor = element_blank())
+
+# Check the distribution of mean latency
+hist(mlatency$latency)
+shapiro.test(mlatency$latency)
+qqnorm(mlatency$latency)
+
+# Transform mean latency
+hist(sqrt(mlatency$latency))
+shapiro.test(sqrt(mlatency$latency))
+qqnorm(sqrt(mlatency$latency))
 ```
+
+I applied a square-root transformation to latency because the data was left-skewed. The Shapiro-Wilks test for normalcy showed the pre-transformed data were non-normally distributed while the post-corrected data were (better, but still imperfectly) normally distributed. 
 
 ## Handling response
 
@@ -105,27 +119,30 @@ handling <- read_excel("Input/bsc assay data.xlsx", sheet = 7) %>%
   # Filter to study birds
   filter(bird %in% birds) %>%
   # Filter to assay dates
-  filter(date %in% c("2022-10-20"))
+  filter(date %in% c("2022-10-20")) %>%
+  # Drop unneeded columns
+  dplyr::select(c(bird, score))
 
 # Plot frequency of handling scores
 ggplot(handling)+
   geom_bar(aes(score))+
   scale_y_continuous(breaks =c(1,3,5,7,9))+
-  theme_minimal()
+  theme_minimal()+
+  theme(panel.grid.minor = element_blank())
 ```
 
 Most birds (64%) had a handling score of 1, with 21% a score of 2 and just two individuals (14%) with a score of 3. 
 
 As a side note, where we have repeat measures (i.e., taken post-release- but these aren't documented here) the handling response stays the same; however, for now we are just interested in whether the pre-release assay values predict other post-release behaviours. 
 
-### Vigilance
+## Behaviour
 
-Birds were filmed in their aviaries between 12pm-4pm. For every film recorded (activited by the infrared sensor on the trail camera) we encoded each second of behaviour for each bird. We calculated the the proportion of time spent in vigilant behaviours (considered mutually exclusive from 'relaxed' behaviours). 
+Birds were filmed in their aviaries between 12pm-4pm. For every film recorded (activated by the infrared sensor on the trail camera) we encoded each second of behaviour for each bird. We calculated the the proportion of time spent in alert behaviours (considered mutually exclusive from 'relaxed' behaviours). 
 
-*Vigilant behaviours* were defined as:
+*Alert behaviours* were defined as:
 
 * Alertness: standing but not relaxed, often startled into this pose from a more relaxed posture. May have a stiffer pose, holding neck extended or forward. May have flattened the feathers against the body. 
-* Alert walk: walking with the neck stiffly extended parallel wit hthe ground. Feathers either fluffed up (held erect) or slimmed against body, as opposed to held loosely. 
+* Postured walk: walking with the neck stiffly extended parallel wit the ground. Feathers either fluffed up (held erect) or slimmed against body, as opposed to held loosely. 
 * Head-bobbing: a rapid up/down movement of the head; used to communicate unease.
 * Head-tilting: craning the head to the side to look above and around; possibly to check for danger (can be done in tandem with head-bobbing).
 * Tail-wagging: a rapid side/side shake of the tail; used to communicate unease.
@@ -139,45 +156,153 @@ Birds were filmed in their aviaries between 12pm-4pm. For every film recorded (a
 * Walking: stepping forward (in the absence of vigilant behaviours as defined above).
 * sitting: either on tibiotarsus or fully on the ground; includes sleeping. 
 * Eating: engaged in looking at, carrying, pecking, picking up, swallowing or breaking up food (or non food items that are being tested e.g. leaves). Can rapidly (second by second) change between eating and alertness. 
+* Calling: calling as part of group crescendo with "werloo" song (as opposed to short contact calls while doing other beahviours such as sitting or standing)
 
 Here we read in the video assay data and calculate the time spent vigilant as a proportion of whole time. Some videos have sections where the bird is out of frame (noted in ethogram as 'Z'), which are excluded from the time allocation analysis. 
 
-```{r vigilance}
+```{r behaviours}
+# Ethogram
+eth <- matrix(c("A", "Alert",
+                "C", "Calling",
+                "D", "Defensive wing display",
+                "E", "Eating/drinking",
+                "F", "Fluff",
+                "HB", "Head bob",
+                "HT", "Head tilt",
+                "I", "Sitting",
+                "N", "Camouflaged walk",
+                "O", "Courtship",
+                "P", "Preening",
+                "S", "Standing",
+                "W", "Walking",
+                "TW", "Tail wag",
+                "Z", "Out of frame"),
+              ncol = 2, byrow = TRUE) %>%
+  as.data.frame() %>%
+  rename(code = V1,
+         Behaviour = V2)
+
+# Assign plotting order of behaviours
+order <- c("Alert", "Head bob", "Head tilt", "Tail wag", "Camouflaged walk", 
+           "Defensive wing display", "Calling", "Eating/drinking", "Courtship",
+           "Fluff", "Preening", "Sitting", "Standing", "Walking", "Out of frame")
+
 # Read in and tidy up video assays 
-video <- read_excel("Input/bsc assay data.xlsx", sheet =4) %>%
+behaviour <- read_excel("Input/bsc assay data.xlsx", sheet =4) %>%
   clean_names() %>%
   # Drop metadata columns
-  select(-c("clip", "note")) %>%
+  dplyr::select(-c("clip", "note")) %>%
   # Convert from wide to long
-  pivot_longer(3:61, names_to = "second", values_to = "behaviour") %>%
+  pivot_longer(3:61, names_to = "second", values_to = "code") %>%
   # Convert seconds into numeric
   mutate(second = as.numeric(str_remove(second, "x"))) %>%
+  # Drop instances of out of frame 
+  filter(!code == "Z") %>%
+  # Lump all variations of head tilt 
+  mutate(code = ifelse(code %in% c("HBT", "HTB", "HTW"), "HT", code)) %>%
+  # Add behaviour descriptions from ethogram
+  left_join(eth) %>%
+  # Turn behaviour into a factor to assign order for plotting
+  mutate(Behaviour = factor(Behaviour, levels = order)) %>%
   # Assign vigilance to 1 and not to 0
-  mutate(vigilant = ifelse(behaviour %in% 
-                             c("A","HT","HB","HBT","N","TW","D"), 1, 0)) %>%
+  mutate(vigilant = ifelse(code %in% 
+                             c("A", "D", "HB", "HT", "TW", "N"), 1, 0)) %>%
   # Drop lines without recordings (primarily for Prem and Rove who had 10 second clips)
   na.omit()
 
-# Calculate time spent vigilant
-vigilance <- video %>%
-  group_by(bird) %>%
-  summarise(z = sum(grepl("Z", behaviour)),
-            L = length(behaviour) - z,
-            v = sum(vigilant),
-            pv = v/L)
-
-# Plot proportion of time spent vigilant by bird
-ggplot(vigilance) + 
-  geom_bar(aes(bird, pv), position = "dodge", stat = "identity")+
-  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
-  labs(x= element_blank(), y = "Proportion of time spent vigilant")+
+# Plot proportion of time spent in each behaviour per bird
+ggplot(behaviour) + 
+  geom_bar(aes(x= bird, fill = Behaviour), position = "fill")+
+  labs(x= element_blank(), 
+       y = "Proportion of time spent in each behaviour")+
   scale_x_discrete(guide = guide_axis(angle = 45)) +
+  theme_minimal()+
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        axis.text.y = element_blank())+
+  scale_fill_viridis_d(direction = -1)
+
+# Calculate proportion of time spent in each behaviour and a summed 'alert' metric
+time <- count(behaviour, bird) %>%
+  rename(total = n)
+prop_behav <- count(behaviour, bird, code) %>%
+  left_join(time) %>%
+  # Divide count of behaviour by total time for %
+  mutate(prop = n/total) %>%
+  dplyr::select(-c(n, total)) %>%
+  # Pivot wider, one column per behaviour
+  pivot_wider(names_from = code, values_from = prop) %>%
+  # Replace NAs for behaviour with zeroes
+  replace(is.na(.), 0) %>%
+  # Add column for summed 'alert' measure
+  mutate(alert = A + HB + HT + TW + N + D)
+
+# Plot time spent alert
+ggplot(prop_behav) +
+  geom_bar(aes(x= bird, y= alert), position = "dodge", stat = "identity")+
+  labs(x= element_blank(), 
+       y = "Proportion of time spent in alert behaviours")+
+  scale_x_discrete(guide = guide_axis(angle = 45)) +
+  theme_minimal()+
+  theme(panel.grid.minor = element_blank())
+
+# Check distribution of behaviours
+hist(data$alert)
+```
+
+Interestingly, the amount of time spent 'alert' (yellows and greens) seems (visually at least) inversely related to the amount of time spent eating (aqua), rather than cutting in to the time spent resting (purples). 
+
+The 'alert' metric is close to normally distributed. 
+
+## Traits
+
+I included some non-behavioural trait predictors to compare with the assays predictions. These included life-history and morphological traits.
+
+```{r traits}
+# Read in additional bird trait data
+traits <- read_excel("Input/bsc assay data.xlsx", sheet = 8) %>%
+  clean_names() %>%
+  rename(bird = individual) %>%
+  # Group non MR origins into one category
+  mutate(origin2 = ifelse(!origin=="Mt Rothwell", "other", "Mt Rothwell"))
+```
+
+Out of curiosity, I want to know whether the traits are correlated.
+
+```{r traits 2}
+# Weight and condition by sex
+ggplot(traits, aes(x= condition, y= weight, fill = sex))+
+  geom_boxplot()+
+  geom_jitter()+
+  theme_minimal()
+
+# Weight and tarsus by sex
+ggplot(traits, aes(x= tarsus, y= weight, fill = sex))+
+  geom_point()+
+  geom_smooth(method = "lm")+
+  theme_minimal()
+
+# Wind chord and tarsus by sex
+ggplot(traits, aes(x= wing, y= tarsus, fill = sex))+
+  geom_point()+
+  geom_smooth(method = "lm")+
+  theme_minimal()
+
+# Weight and tarsus by origin
+ggplot(traits, aes(x= tarsus, y= weight, fill = origin2))+
+  geom_point()+
+  geom_smooth(method = "lm")+
   theme_minimal()
 ```
 
+1) Males weigh more than females. Weight in the 'good' condition score varies more for females compared to males.
+2) Females have in general a smaller weight:tarsus ratio than males, but with sex overlap.
+3) Males have a larger tarsus than females but wing lenght only differs at the extremes.
+4) Size doesn't vary by origin. 
+
 # Responses
 
-Here we consider post-release performance in terms of survival. We tracked birds with GPS devices to determine their fate. The GPS devices were removed in January 2024. Because different cohorts were released at different times (October, December or January), the maximum tracked duration is 360 days. To standardise among groups, the max persistence was set to 360 days.
+We tracked birds with GPS devices to determine their fate. The GPS devices were removed in January 2024. Because different cohorts were released at different times (October, December or January), the maximum tracked duration is 360 days. 
 
 We assessed survival in three ways:
 
@@ -194,256 +319,265 @@ survival <- read.csv("Input/survival.csv") %>%
   rename(bird = identity) %>%
   filter(bird %in% birds) %>%
   # Limit persistence value to minimum common tracked time of 360
-  mutate(persist = ifelse(persist>360, 360, persist))
+  mutate(persist = ifelse(persist>360, 360, persist)) %>%
+  # Convert true and false to 0 and 1
+  mutate(to_90 = ifelse(to_90 == FALSE, 0, 1),
+         to_360 = ifelse(to_360 == FALSE, 0, 1)) %>%
+# Drop unneeded columns
+  dplyr::select(c(bird, persist, to_90, to_360))
+
+# Check the distribution of persistence and test some transformations
+hist(survival$persist)
+hist(sqrt(survival$persist))
+hist(log(survival$persist))
+
+# Combine survival with all predictors
+data <- left_join(survival, mlatency) %>%
+  left_join(handling) %>%
+  left_join(prop_behav) %>%
+  left_join(traits)
 ```
+
+Persistence data remained right skewed despite tested transformations. Instead, can use a Gamma family in the glm() call to account for positively skewed data (with the default log link because all values are >0). 
+
+For the survival to 90-days and 1-year, we use a binomial family glm (because responses are binary; with the default logit link). 
 
 # Analyses
-## Latency and survival
-
-Combine predictor (latency) and response (survival).
-
-```{r m1}
-# Combine survival and latency data
-m1_data <- survival %>%
-  select(c("bird", "persist", "to_90", "to_360")) %>%
-  left_join(latency)
-```
-
-There are two levels of response for latency to reach food: 
-
-1) Did the bird reach the food (yes/no)
-2) How long did it take the bird to reach the food?
-
-### m1a: latency ~ survival (90 days)
-
-*Does latency to reach food predict survival to 90-days post-release?*
-
-First we looked at the distribution of responses of whether they reached the food with survival. 
-
-```{r reach food 90 days}
-# Survived to 90 days
-mosaicplot(table(m1_data$to_90, m1_data$reach))
-chisq.test(table(m1_data$to_90, m1_data$reach))
-```
-
-The birds didn't reach the food on one third of occasions, but all birds reached the food at least once (out of two trials). From here on we'll just use the time to reach the food.
-
-We used a binomial family glm because the response variable (survival) is binary.
+## Model selection approach
+Instead of assessing each predictor separately, here I throw all of them into a single model along with the traits to see what best predicts survival/persistence.
 
 ```{r m1a}
-# Drop DNRs
-m1_data <- filter(m1_data, !label == "DNR")
-
-# m1a: Does latency to reach food predict survival? To 90 days.
-ggplot(m1_data)+
-  geom_boxplot(aes(x= to_90, y=log(latency), group=to_90))+
-  theme_minimal()
-
-m1a <- glmmTMB(to_90 ~ scale((latency)),
-           data = m1_data,
-           family = binomial)
-
-summary(m1a)
-
+# m1a: What predicts survival to 90 days?
+m1a <- glm(to_90 ~ sqrt(latency) + alert + as.factor(score) + as.factor(sex) + weight + 
+            as.factor(age) + as.factor(condition) + as.factor(origin2) + tarsus,
+           data = data,
+           family = binomial())
+anova(m1a, test = "F")
 check_model(m1a)
 ```
 
-Remember to say cannot use random effects because issues with model convergence due to low sample size. Include comment on model performance sub optimal 
+```{r m1b}
+# m1b: What predicts survival to 1 year?
+m1b <- glm(to_360 ~ sqrt(latency) + alert + as.factor(score) + as.factor(sex) + weight + 
+            as.factor(age) + as.factor(condition) + as.factor(origin2) + tarsus,
+           data = data,
+           family = binomial())
+anova(m1b, test = "F")
+check_model(m1b)
+```
 
-Ideally I should have used date as a random factor (because some two-thirds of the birds have two latency scores), but the model wasn't able to handle this and gave me an error that "negative log-likelihood is NaN at starting parameter values". 
+## Latency and survival
+The relationship between reaching food and survival was not significant in either time period.
 
-Perhaps I should use a hurdle model - first did they reach the food and then how long it took to reach the food?
+In the model selection (m1a and m1b), sqrt(latency) weakly predicted survival to 90-days but not to 1-year. Let's have a closer look at these. 
 
-### m1b: latency ~ survival (1 year)
+*Does latency to reach food predict survival to 90-days post-release?*
+
+```{r m2a}
+# m2a: Does latency to reach food predict survival? To 90 days.
+## Violin plot
+ggplot(data, aes(x= to_90, y=sqrt(latency), group=to_90))+
+  geom_violin()+
+  geom_point(size = 2)+
+  labs(x= "Survival to 90-days post-release", 
+       y = "Latency to reach food (squareroot transformed)")+
+  theme_minimal()+
+  theme(panel.grid.minor = element_blank())+
+  scale_x_continuous(breaks = c(0,1), labels = c(FALSE, TRUE))
+
+## Logistic regression with binomial family
+m2a <- glm(to_90 ~ sqrt(latency),
+           data = data,
+           family = binomial())
+summary(m2a)
+check_model(m2a)
+
+# Survival probability
+exp(coef(m1a))
+```
+
+Only three birds (21%) died in the period to 90-days post-release. There is weak evidence (i.e. marginally significant prediction) that shorter latency periods predict survival. 
+
+When latency approaches zero the chance of survival is 82% (based on the intercept coefficient estimate). With every unit increase in sqrt(latency), the odds of survival decrease by a factor of 0.94.
+
+Model performance is imperfect, with non-normally distributed residuals. Given the management needs to balance risk and uncertainty during translocation, I would use this imperfect information to inform the translocation approach until better information can be gathered for adaptive management. Since lower latency *might* inform survival, and we want to reduce unnecessary mortality, this is a useful management tool. 
+
+Next, we looked at the effect of latency on survival to 1-year post-release. 
 
 *Does latency to reach food predict survival to 1-year post-release?*
 
-First we looked at the distribution of responses of whether they reached the food with survival. 
+```{r m2b}
+# m2b: Does latency to reach food predict survival? To 360 days.
+## Violin plot
+ggplot(data, aes(x= to_360, y=sqrt(latency), group=to_360))+
+  geom_violin()+
+  geom_point(size = 2)+
+  labs(x= "Survival to 1-year post-release", 
+       y = "Latency to reach food (squareroot transformed)")+
+  theme_minimal()+
+  theme(panel.grid.minor = element_blank())+
+  scale_x_continuous(breaks = c(0,1), labels = c(FALSE, TRUE))
 
-```{r reach food 1 year}
-# Survived to 360 days
-mosaicplot(table(m1_data$to_360, m1_data$reach))
-chisq.test(table(m1_data$to_360, m1_data$reach))
+## Logistic regression with binomial family
+m2b <- glm(to_360 ~ sqrt(latency),
+           data = data,
+           family = binomial())
+summary(m2b)
+check_model(m2b)
 ```
 
-As before, we used a binomial family glm because the response variable (survival) is binary.
+Just under half of the birds (42%, n = 6) survived to the 1-year post-release period. The chance of survival increases with decreasing latency values. However, unlike for 90-days, the effect is not significant. This could indicate that latency has a more immediate impact on short-term survival but less influence on long-term survival.
 
-```{r m1b}
-# m1b: Does latency to reach food predict survival? To 360 days.
-ggplot(m1_data)+
-  geom_boxplot(aes(x= to_360, y=log(latency), group=to_360))+
-  theme_minimal()
+Potentially, whatever behavioural traits are related to latency (perhaps risk:reward trade-off or drive for food) only relates to survival in the period immediately following release. Perhaps this is due to the drive to find food resources during establishment, but this effect does not impact long-term survival which is (likely) more related to anti-predation traits, rather than resource-related traits.
 
-m1b <- glmmTMB(to_360 ~ scale(log(latency)),
-           data = m1_data,
-           family = binomial)
-summary(m1b)
+This highlights the importance of sampling period and the different drives of survival in the short and long term post-release.
 
-check_model(m1b)
-
-```
-
-### m1c: latency ~ persistence
-*Does latency to reach food predict persistence?*
-
-First, we checked the distribution of the response variable (persistence) to select the appropriate glm model family. 
-
-```{r persist}
-hist(m1_data$persist)
-hist(log(m1_data$persist))
-```
-
-The persistence values are duration (e.g. zero or higher) and have a right-skewed distribution; therefore a negative binomial regression model should be suitable.
-
-```{r m1c}
-# m1c: Does latency to reach food predict persistence?
-ggplot(m1_data, aes(persist, log(latency)))+
-  geom_point()+
-  geom_smooth(method = "lm")+
-  theme_minimal()
-
-m1c <- glmmTMB(persist ~ scale(log(latency)) + (1|bird),
-           data = m1_data)
-
-summary(m1c)
-
-check_model(m1c)
-```
-
-Weak evidence that latency predicts persistence. Aagain, should this be a hurdle (first reach then latency)?
+In summary, latency only has a meaningful impact on short-term survival (to 90 days), not overall persistence across the 1-year study period. 
 
 ## Handling response and survival
 
-Combine predictor (handling score) and response (survival).
-
-```{r m2}
-m2_data <- survival %>%
-  select(c("bird", "persist", "to_90", "to_360")) %>%
-  left_join(handling) %>%
-  mutate(score = as_factor(score))
-```
-
-### m2a: handling response ~ survival (90 days)
-*Does handling response predict survival to 90-days post-release?*
-
-```{r m2a}
-mosaicplot(table(m2_data$to_90, m2_data$score))
-chisq.test(table(m2_data$to_90, m2_data$score))
-```
-
-### m2b: handling response ~ survival (1 year)
-*Does handling response predict survival to 1-year post-release?*
-
-```{r m2b}
-mosaicplot(table(m2_data$to_360, m2_data$score))
-chisq.test(table(m2_data$to_360, m2_data$score))
-```
-
-While there is no evidence for a prediction here (on the chi-squared test, keeping in mind low sample size) there are some interesting observations we can make: 1) Both birds with a handling score of 3 survived. 2) No birds with a handling score of 2 survived. Perhaps an intermediate strategy is suboptimal i.e., it's better to either commit to full camouflage or full flight, not the middle ground. Perhaps the middle ground is evidence of habituation, since both scores 1 and 3 can be considered a predator-response behaviour (flight or camouflage). 
-
-#### m2c: handling response ~ persistence
-*Does handling response predict persistence?*
-
 Since handling score is categorical, we'll use ANOVA and chi-squared to compare frequencies. 
 
-```{r m2b}
-# Does handling response predict persistence?
-ggplot(m2_data)+
-  geom_boxplot(aes(score, persist, group = score))+
-  theme_minimal()
-
-m2c <- aov(persist ~ score,
-           data = m2_data)
-summary(m2c)
-```
-
-All the score 3 birds do well. 
-
-Interestingly, the persistence time for score 2 individuals is pretty long (195 & 308 days) - which contradicts my earlier thoughts about score 2 being maladaptive. Instead, it looks like there are a range of score 1 individual persistence values.
-
-Overall, there is no evidence that handling score predicts persistence. 
-
-
-## Vigilance and survival
-
-Combine predictor (handling score) and response (survival).
-
-```{r m3}
-# Join vigilance and survival data
-m3_data <- survival %>%
-  select(c("bird", "persist", "to_90", "to_360")) %>%
-  left_join(vigilance)
-```
-
-### m3a: vigilance ~ survival (90 days)
-*Does vigilance predict survival to 90-days post-release?*
-
-We use a binomial family glm because the response variable (survival) is binary.
+*Does handling response predict survival to 90-days post-release?*
 
 ```{r m3a}
-# m3a: Does vigilance predict survival to 90 days>
-ggplot(m3_data)+
-  geom_boxplot(aes(to_90, pv))+
-  labs(y = "Proportion of time spent vigilant")+
-  theme_minimal()
+mosaicplot(table(data$to_90, data$score), 
+           main = NULL, 
+           xlab = "Survival to 90-days post-release",
+           ylab = "Handling score")
 
-m3a <- glmmTMB(to_90 ~ pv,
-           data = m3_data,
-           family = binomial)
+chisq.test(table(data$to_90, data$score))
+```
 
+*Does handling response predict survival to 1-year post-release?*
+
+```{r m3b}
+mosaicplot(table(data$to_360, data$score), 
+           main = NULL, 
+           xlab = "Survival to 1-year post-release",
+           ylab = "Handling score")
+
+chisq.test(table(data$to_360, data$score))
+```
+
+While there is no evidence of a relationship between handling score and survival to 90-days, there is weak evidence of a relationship to 1-year.
+
+Some interesting observations:
+
+1) Both birds with a handling score of 3 survived. 
+2) No birds with a handling score of 2 survived. 
+
+Perhaps an intermediate strategy is sub-optimal i.e., it's better to either commit to full camouflage or full flight, not the middle ground. Perhaps the middle ground is evidence of habituation, since both scores 1 and 3 can be considered a predator-response behaviour (flight or camouflage). 
+
+While latency to reach food better predicted survival to 90-days, handling response better predicted survival to 1-year. As discussed earlier, perhaps that is because these assay approaches measure different traits. I think latency may be related to resource acquisition while handling may be related to anti-predator response. 
+
+*Does handling response predict persistence?*
+
+```{r m3c}
+# Does handling response predict persistence?
+## Violin plot
+ggplot(data, aes(score, persist, group = score))+
+  geom_violin()+
+  geom_point(size = 2)+
+  theme_minimal()+
+  labs(x= "Handling Response", 
+       y = "Post-release persistence (days)")+
+  theme_minimal()+
+  theme(panel.grid.minor = element_blank())
+
+## ANOVA to test whether score is a good predictor of persistence (Gamma for persistence right skew)
+m3c <- glm(persist ~ score,
+           data = data, 
+           family = Gamma(link = "log"))
+summary(m3c)
+check_model(m3c)
+
+## Predictions
+predict(m2c, newdata = data.frame(score = c(1,2,3)), type = "response")
+```
+
+Score isn't a good predictor of persistence. However, all the score 3 birds survive the full monitoring period. 
+
+Interestingly, the persistence time for score 2 individuals is pretty long (195 & 308 days) - which contradicts my earlier thoughts about score 2 being maladaptive. Indeed, the mean and predicted survival for score 2 is higher than that of score 1. 
+
+Overall, there is weak evidence that handling score predicts persistence. In the context of adaptive management (the same as for the latency score), I would use this information to inform management until better information can be gathered. That is, preferentially release score 3 birds when risk and uncertainty are high. I would not release score 2 birds during a pilot study, but perhaps they can be used later in a reintroduction program. 
+
+## Behaviour and survival
+
+
+*Does behaviour predict survival to 90-days post-release?*
+
+```{r m3a}
+# m3a: Does behaviour predict survival to 90 days?
+## Violin plot
+ggplot(data, aes(x= to_90, y= alert, group = to_90))+
+  geom_violin()+
+  geom_point(size = 2)+
+  labs(x= "Survival to 90-days post-release", 
+       y = "Proportion of time spent alert")+
+  theme_minimal()+
+  theme(panel.grid.minor = element_blank())+
+  scale_x_continuous(breaks = c(0,1), labels = c(FALSE, TRUE))
+
+## Logistic regression with binomial family testing all combos
+m3a <- lm(to_90 ~ A + HB + HT + TW + E + P + alert,
+           data = data,
+           family = binomial())
 summary(m3a)
 ```
 
-### m3b: vigilance ~ survival (1 year)
-*Does vigilance predict survival to 1-year post-release?*
+No evidence that behaviour predicts survival to 90-days post-release. 
 
-We use a binomial family glm because the response variable (survival) is binary.
+### m3b: behaviour ~ survival (1 year)
+*Does behaviour predict survival to 1-year post-release?*
 
 ```{r m3b}
-# m3b: Does vigilance predict survival to 1 year?
-ggplot(m3_data)+
-  geom_boxplot(aes(to_360, pv))+
-  labs(y = "Proportion of time spent vigilant")+
-  theme_minimal()
+# m3b: Does behaviour predict survival to 1 year?
+## Violin plot
+ggplot(data, aes(x= to_360, y= alert, group = to_360))+
+  geom_violin()+
+  geom_point(size = 2)+
+  labs(x= "Survival to 1-year post-release", 
+       y = "Proportion of time spent alert")+
+  theme_minimal()+
+  theme(panel.grid.minor = element_blank())+
+  scale_x_continuous(breaks = c(0,1), labels = c(FALSE, TRUE))
 
-m3b <- glmmTMB(to_360 ~ pv,
-           data = m3_data,
-           family = binomial)
+## Logistic regression with binomial family testing all combos
+m3b <- lm(to_360 ~ A + HB + HT + TW + E + P + alert,
+           data = data,
+           family = binomial())
 summary(m3b)
 ```
 
+No evidence that assay behaviour predicts survival to 1-year post-release. 
 
-No evidence that proportion of time spent vigilant predicts survival. 
-
-#### m3b: vigilance ~ persistence
-*Does vigilance predict persistence?*
+### m3c: behaviour ~ persistence
+*Does behaviour predict persistence?*
 
 As before, we use a negative binomial regression model because of the right-skewed persistence values. 
 
-```{r m3b}
-# m3b: Does vigilance predict persistence?
-ggplot(m3_data, aes(persist, pv))+
+```{r m3c}
+# m3c: Does behaviour predict persistence?
+## Box Plot
+ggplot(data, aes(persist, alert))+
   geom_point()+
   geom_smooth(method = "lm")+
-  labs(y = "Proportion of time spent vigilant")+
-  theme_minimal()
+  labs(y = "Proportion of time spent alert")+
+  theme_minimal()+
+  theme(panel.grid.minor = element_blank())
 
-m3b <- glmmTMB(persist ~ pv,
-           data = m3_data,
-           family = nbinom2(link = "log"))
-summary(m3b)
+## Logistic regression with binomial family
+m3c <- glm(persist ~ alert,
+           data = data,
+           family = Gamma(link = "log"))
+summary(m3c)
 ```
 
 No relationship. Although most vigilant bird (Iona) survived full time period. 
 
-That's all of the predictors against survival/persistence. Looks like none of the metrics predicted survival. But maybe we'll be able to predict sub-lethal effects or behaviours that might influence future survival and reproduction.
-
-
-
-
-### Hazard rate
-
-I also want to try using a survival analysis approach, since 'persistence' is a time-to-event response. 
+## Survival analysis
+To look at persistence I am using a survival analysis approach, since 'persistence' is a time-to-event response. 
 
 First I plot the survival curve to see if the hazard rate is constant over time (although this is tough with n=13).
 
@@ -483,6 +617,3 @@ plot_model(test, type = "pred")
 ```
 
 The hazard rate is approximately linear (i.e., constant), so we should be able to use a Cox proportional hazard model rather than a parametric survival model. 
-
-
-
