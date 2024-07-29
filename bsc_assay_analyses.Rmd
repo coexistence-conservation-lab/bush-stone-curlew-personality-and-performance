@@ -248,6 +248,11 @@ ggplot(prop_behav) +
 
 # Check distribution of behaviours
 hist(prop_behav$alert)
+
+# Summarise allocation of behaviours
+prop_behav_sum <- prop_behav %>%
+  summarise(across(where(is.numeric),list(mean = mean, sd = sd))) %>%
+  pivot_longer(1:30)
 ```
 
 Interestingly, the amount of time spent 'alert' (yellows and greens) seems (visually at least) inversely related to the amount of time spent eating (aqua), rather than cutting in to the time spent resting (purples). 
@@ -259,12 +264,28 @@ The 'alert' metric is close to normally distributed.
 I included some non-behavioural trait predictors to compare with the assays predictions. These included life-history and morphological traits.
 
 ```{r traits}
-# Read in additional bird trait data
-traits <- read_excel("Input/bsc assay data.xlsx", sheet = 8) %>%
+# Read in additional bird metadata
+meta <- read_excel("Input/bsc assay data.xlsx", sheet = 8) %>%
   clean_names() %>%
   rename(bird = individual) %>%
-  # Group non MR origins into one category
-  mutate(origin2 = ifelse(!origin=="Mt Rothwell", "other", "Mt Rothwell"))
+  select(c(bird, sex, age))
+
+# And pre-release weights
+weights <- read_excel("Input/bsc assay data.xlsx", sheet = 9) %>%
+  clean_names() %>%
+  select(c(identity, weight, condition)) %>%
+  rename(bird = identity)
+
+# And morphometrics 
+traits <- read_excel("Input/bsc assay data.xlsx", sheet = 10) %>%
+  clean_names()  %>%
+  select(c(identity, wing, tail, tarsus)) %>%
+  rename(bird = identity) %>%
+  filter(bird %in% birds) %>%
+  # Combine all traits data
+  left_join(meta) %>%
+  left_join(weights)
+
 ```
 
 Out of curiosity, I want to know whether the traits are correlated.
@@ -287,18 +308,13 @@ ggplot(traits, aes(x= wing, y= tarsus, fill = sex))+
   geom_point()+
   geom_smooth(method = "lm")+
   theme_minimal()
-
-# Weight and tarsus by origin
-ggplot(traits, aes(x= tarsus, y= weight, fill = origin2))+
-  geom_point()+
-  geom_smooth(method = "lm")+
-  theme_minimal()
 ```
 
 1) Males weigh more than females. Weight in the 'good' condition score varies more for females compared to males.
 2) Females have in general a smaller weight:tarsus ratio than males, but with sex overlap.
 3) Males have a larger tarsus than females but wing lenght only differs at the extremes.
-4) Size doesn't vary by origin. 
+
+I didn't end up using the morphometric data in the models due to convergence issues with low sample sizes. 
 
 # Responses
 
@@ -324,7 +340,7 @@ survival <- read.csv("Input/survival.csv") %>%
   mutate(to_90 = ifelse(to_90 == FALSE, 0, 1),
          to_360 = ifelse(to_360 == FALSE, 0, 1)) %>%
 # Drop unneeded columns
-  dplyr::select(c(bird, persist, to_90, to_360))
+  dplyr::select(c(bird, persist, to_90, to_360, start_date, end_date))
 
 # Check the distribution of persistence and test some transformations
 hist(survival$persist)
@@ -335,7 +351,9 @@ hist(log(survival$persist))
 data <- left_join(survival, mlatency) %>%
   left_join(handling) %>%
   left_join(prop_behav) %>%
-  left_join(traits)
+  left_join(traits) %>%
+  # Drop un-needed behaviour columns
+  dplyr::select(-c(A, C, E, F, HB, HT, N, O, P, S, TW, W, D, I))
 ```
 
 Persistence data remained right skewed despite tested transformations. Instead, can use a Gamma family in the glm() call to account for positively skewed data (with the default log link because all values are >0). 
@@ -348,11 +366,12 @@ Instead of assessing each predictor separately, here I throw all of them into a 
 
 ```{r m1a}
 # m1a: What predicts survival to 90 days?
-m1a <- glm(to_90 ~ sqrt(latency) + alert + as.factor(score) + as.factor(sex) + weight + 
-            as.factor(age) + as.factor(condition) + as.factor(origin2) + tarsus,
+m1a <- glm(to_90 ~ sqrt(latency) + alert + as.factor(score) + as.factor(sex) + weight,
            data = data,
            family = binomial())
-anova(m1a, test = "F")
+
+anova(m1a, test = "Chi")
+
 check_model(m1a)
 ```
 
@@ -360,27 +379,20 @@ The best predictor for survival to 90-days was weight (significant), followed by
 
 ```{r m1b}
 # m1b: What predicts survival to 1 year?
-m1b <- glm(to_360 ~ sqrt(latency) + alert + as.factor(score) + as.factor(sex) + weight + 
-            as.factor(age) + as.factor(condition) + as.factor(origin2) + tarsus,
+m1b <- glm(to_360 ~ sqrt(latency) + alert + as.factor(score) + as.factor(sex) + weight,
            data = data,
            family = binomial())
-anova(m1b, test = "F")
+
+anova(m1b, test = "Chi")
+
 check_model(m1b)
 ```
 
-The best predictor for survival to 1-year was sex (significant), followed by handling score (significant). 
+The best predictor for survival to 1-year was again weight(significant), then sex (significant), followed by handling score (significant). 
 
 Interestingly, the predictors differed by time period - highlighting the importance of monitoring duration and also the different survival pressures between short and mid term post-release. 
 
 Since behaviour (the 'alert' metric) didn't predict survival to either time period, I won't investigate this further. Which is a shame since it was the most time consuming metric to create (around 60 hours)! At least this might reduce the effort future practitioners need to go to. 
-
-## Weight and survival
-
-⚠️ to do
-
-## Sex and survival
-
-⚠️ to do
 
 ## Latency and survival
 The relationship between reaching food and survival was not significant in either time period.
@@ -405,8 +417,8 @@ ggplot(data, aes(x= to_90, y=sqrt(latency), group=to_90))+
 m2a <- glm(to_90 ~ sqrt(latency),
            data = data,
            family = binomial())
+
 summary(m2a)
-check_model(m2a)
 
 # Survival probability
 exp(coef(m1a))
@@ -438,8 +450,8 @@ ggplot(data, aes(x= to_360, y=sqrt(latency), group=to_360))+
 m2b <- glm(to_360 ~ sqrt(latency),
            data = data,
            family = binomial())
+
 summary(m2b)
-check_model(m2b)
 ```
 
 Just under half of the birds (42%, n = 6) survived to the 1-year post-release period. The chance of survival increases with decreasing latency values. However, unlike for 90-days, the effect is not significant. This could indicate that latency has a more immediate impact on short-term survival but less influence on long-term survival.
@@ -493,44 +505,125 @@ Overall, there is weak evidence that handling score predicts persistence. In the
 
 In summary, handling score is a better predictor of long-term surival (1 year) than latency. 
 
-## Survival analysis
+## Weight and survival
 
-⚠️ incomplete
+The best predictor for survival in both periods was weight. I investigate this separately here. 
+
+```{r m4}
+# m4a: Does weight predict survival? To 90 days.
+## Violin plot
+ggplot(data, aes(x= to_90, y=weight, group=to_90))+
+  geom_violin()+
+  geom_point(size = 2)+
+  labs(x= "Survival to 90-days post-release", 
+       y = "Pre-release weight")+
+  theme_minimal()+
+  theme(panel.grid.minor = element_blank())+
+  scale_x_continuous(breaks = c(0,1), labels = c(FALSE, TRUE))
+
+## Logistic regression with binomial family
+m4a <- glm(to_90 ~ weight,
+           data = data,
+           family = binomial())
+summary(m4a)
+
+# m4b: Does weight predict survival? To 1 year.
+## Violin plot
+ggplot(data, aes(x= to_360, y=weight, group=to_360))+
+  geom_violin()+
+  geom_point(size = 2)+
+  labs(x= "Survival to 1-year post-release", 
+       y = "Pre-release weight")+
+  theme_minimal()+
+  theme(panel.grid.minor = element_blank())+
+  scale_x_continuous(breaks = c(0,1), labels = c(FALSE, TRUE))
+
+## Logistic regression with binomial family
+m4b <- glm(to_360 ~ weight,
+           data = data,
+           family = binomial())
+summary(m4b)
+```
+
+## Sex and survival
+
+A predictor for survival to 1-year was sex I investigate this separately here. 
+
+```{r m5}
+# m5a: Does weight predict survival? To 90 days.
+## Mosaic plot
+mosaicplot(table(data$to_90, data$sex), 
+           main = NULL, 
+           xlab = "Survival to 90-days post-release",
+           ylab = "Sex")
+
+chisq.test(table(data$to_90, data$sex))
+
+# m5b: Does weight predict survival? To 1 year.
+## Mosaic plot
+mosaicplot(table(data$to_360, data$sex), 
+           main = NULL, 
+           xlab = "Survival to 1-year post-release",
+           ylab = "Sex")
+
+chisq.test(table(data$to_360, data$sex))
+```
+
+Sex did not predict survival in either time period. The issue is there are only 2 males not surviving to 360 and none not surviving to 90 days. There isn't enough predictive power. But it is interesting to mention. I wonder if sex is coming up as important because the males are bigger and bigger birds are surviving better? 
+
+## Survival analysis
 
 To look at persistence I am using a survival analysis approach, since 'persistence' is a time-to-event response. 
 
-First I plot the survival curve to see if the hazard rate is constant over time (although this is tough with n=13).
+```{r hazard rate}
+# Bring in data and format as Surv() for Kaplan Meier Analysis
+km <- data %>%
+  rename(time = persist,
+         status = to_360)
 
-```{r hazard, eval=FALSE}
+km_fit <- survfit(Surv(persist, to_360) ~ 1, km)
+
+summary(km_fit, times = c(1,90, 180, 270, 359))
+
+plot(km_fit, xlab="Days", main = 'Kaplan Meyer Plot')
+```
+
+
+First I plot the survival curve to see if the hazard rate is constant over time (although this is tough with n=14).
+
+```{r hazard}
 # Add every day for survival
-birds2 <- setdiff(birds, c("Daisy", "Star"))
-survival2 <- data.frame()
+surv <- data.frame()
 
-for(i in 1:length(birds2)){
-  temp <- subset(survival, bird == birds2[i]) %>%
+for(i in 1:length(birds)){
+  temp <- subset(survival, bird == birds[i]) %>%
     mutate(start_date = as_date(start_date, format = "%d/%m/%Y"),
            end_date = as_date(end_date, format = "%d/%m/%Y"))
 
   temp2 <- data.frame(date = as_date(temp$start_date:as_date("2024-01-10"))) %>%
-  mutate(bird = birds2[i],
+  mutate(bird = birds[i],
          status = ifelse(date<temp$end_date, 1, 0),
          # Convert dates to numeric for use in Surv()
          time = date - as_date(temp$start_date))
   
-  survival2 <- rbind(survival2, temp2)
+  surv <- rbind(surv, temp2)
 }
 
-survival3 <- left_join(survival2, latency2) %>%
-  left_join(select(handling, c(bird, score))) %>%
-  mutate(score = as_factor(score))
+hazard <- left_join(surv, data) %>%
+  dplyr::select(-c(persist, to_90, to_360, start_date, end_date))
 
 # Plot hazard rate 
-plot(survfit(Surv(time, status) ~ 1, data = survival2))
-
-summary(survfit(Surv(time, status) ~ 1, data = survival2))
 
 
-test <- coxph(Surv(time, status) ~ scale(latency) + score, data = survival3)
+surv <- with(data, Surv(persist, to_360))
+
+
+plot(survfit(Surv(time, status) ~ 1, data = hazard))
+
+summary(survfit(Surv(time, status) ~ 1, data = hazard))
+
+test <- coxph(Surv(time, status) ~ scale(latency) + score, data = hazard)
+
 summary(test)
 plot_model()
 plot_model(test, type = "pred")
