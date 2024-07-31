@@ -11,7 +11,7 @@ editor_options:
 knitr::opts_chunk$set(echo = TRUE)
 
 # Load packages
-pacman::p_load(beepr, ggpubr, janitor, performance, readxl, sjPlot, survival, tidyverse)
+pacman::p_load(beepr, contsurvplot, ggpubr, janitor, MuMIn, performance, readxl, sjPlot, survival, survminer, tidyverse)
 
 # Bird list excluding Daisy (returned to captivity) & Star (disease fate)
 birds <- c("Briar", "Nutmeg", "Aurora", "Robin",
@@ -268,7 +268,7 @@ I included some non-behavioural trait predictors to compare with the assays pred
 meta <- read_excel("Input/bsc assay data.xlsx", sheet = 8) %>%
   clean_names() %>%
   rename(bird = individual) %>%
-  select(c(bird, sex, age))
+  select(c(bird, sex))
 
 # And pre-release weights
 weights <- read_excel("Input/bsc assay data.xlsx", sheet = 9) %>%
@@ -286,11 +286,21 @@ traits <- read_excel("Input/bsc assay data.xlsx", sheet = 10) %>%
   left_join(meta) %>%
   left_join(weights)
 
+# Summary of weights
+weight_sum <- traits %>%
+  group_by(sex) %>%
+  summarise(weight_mean = mean(weight),
+            weight_sd = sd(weight))
 ```
 
 Out of curiosity, I want to know whether the traits are correlated.
 
 ```{r traits 2}
+# Weight by sex
+ggplot(traits, aes(x = sex, y = weight))+
+  geom_boxplot()+
+  theme_minimal()
+
 # Weight and condition by sex
 ggplot(traits, aes(x= condition, y= weight, fill = sex))+
   geom_boxplot()+
@@ -340,12 +350,7 @@ survival <- read.csv("Input/survival.csv") %>%
   mutate(to_90 = ifelse(to_90 == FALSE, 0, 1),
          to_360 = ifelse(to_360 == FALSE, 0, 1)) %>%
 # Drop unneeded columns
-  dplyr::select(c(bird, persist, to_90, to_360, start_date, end_date))
-
-# Check the distribution of persistence and test some transformations
-hist(survival$persist)
-hist(sqrt(survival$persist))
-hist(log(survival$persist))
+  dplyr::select(c(bird, persist, to_90, to_360))
 
 # Combine survival with all predictors
 data <- left_join(survival, mlatency) %>%
@@ -354,57 +359,65 @@ data <- left_join(survival, mlatency) %>%
   left_join(traits) %>%
   # Drop un-needed behaviour columns
   dplyr::select(-c(A, C, E, F, HB, HT, N, O, P, S, TW, W, D, I))
+
+# Write table to file
+write.csv(data, row.names = FALSE, "data_table.csv")
 ```
-
-Persistence data remained right skewed despite tested transformations. Instead, can use a Gamma family in the glm() call to account for positively skewed data (with the default log link because all values are >0). 
-
-For the survival to 90-days and 1-year, we use a binomial family glm (because responses are binary; with the default logit link). 
 
 # Analyses
-## Model selection approach
-Instead of assessing each predictor separately, here I throw all of them into a single model along with the traits to see what best predicts survival/persistence.
 
-```{r m1a}
-# m1a: What predicts survival to 90 days?
-m1a <- glm(to_90 ~ sqrt(latency) + alert + as.factor(score) + as.factor(sex) + weight,
+## Binary survival
+
+First I take a hypothesis driven approach to looking at the behaviours and traits, to see which predict survival to 90 days and 1 year. I expect to see a difference in which predict survival for each time period, and I expect weight and food to be more important in the short term. I don't expect to see a difference in traits other than pre-release weight. 
+
+### m1 Alert behaviour and survival
+
+```{r m1}
+# m1a: Does proportion of time spent alert predict survival to 90 days?
+## Violin plot
+ggplot(data, aes(x= to_90, y = alert, group=to_90))+
+  geom_violin()+
+  geom_point(size = 2)+
+  labs(x= "Survival to 90-days post-release", 
+       y = "Proportion of time spent alert")+
+  theme_minimal()+
+  theme(panel.grid.minor = element_blank())+
+  scale_x_continuous(breaks = c(0,1), labels = c(FALSE, TRUE))
+
+## Logistic regression with binomial family
+m1a <- glm(to_90 ~ scale(alert),
            data = data,
            family = binomial())
 
-anova(m1a, test = "Chi")
+summary(m1a)
 
-check_model(m1a)
-```
+# m1b: Does proportion of time spent alert predict survival to 1 year?
+## Violin plot
+ggplot(data, aes(x= to_360, y = alert, group=to_360))+
+  geom_violin()+
+  geom_point(size = 2)+
+  labs(x= "Survival to 1 year post-release", 
+       y = "Proportion of time spent alert")+
+  theme_minimal()+
+  theme(panel.grid.minor = element_blank())+
+  scale_x_continuous(breaks = c(0,1), labels = c(FALSE, TRUE))
 
-The best predictor for survival to 90-days was weight (significant), followed by latency (marginally significant). 
-
-```{r m1b}
-# m1b: What predicts survival to 1 year?
-m1b <- glm(to_360 ~ sqrt(latency) + alert + as.factor(score) + as.factor(sex) + weight,
+## Logistic regression with binomial family
+m1b <- glm(to_360 ~ scale(alert),
            data = data,
            family = binomial())
 
-anova(m1b, test = "Chi")
-
-check_model(m1b)
+summary(m1b)
 ```
 
-The best predictor for survival to 1-year was again weight(significant), then sex (significant), followed by handling score (significant). 
+No effect of behaviour on survival to either time period. Which on the one hand is annoying (because it took 40 hours to code the data) but on the other hand is useful (because it might save another practitioner doing the same). It also might be the wrong metric. The birds spent half of their time asleep, so perhaps the behaviour metrics should be recorded at night when the birds are active instead of during their period of restfulness. 
 
-Interestingly, the predictors differed by time period - highlighting the importance of monitoring duration and also the different survival pressures between short and mid term post-release. 
-
-Since behaviour (the 'alert' metric) didn't predict survival to either time period, I won't investigate this further. Which is a shame since it was the most time consuming metric to create (around 60 hours)! At least this might reduce the effort future practitioners need to go to. 
-
-## Latency and survival
-The relationship between reaching food and survival was not significant in either time period.
-
-In the model selection (m1a and m1b), sqrt(latency) weakly predicted survival to 90-days but not to 1-year. Let's have a closer look at these. 
-
-*Does latency to reach food predict survival to 90-days post-release?*
+### m2 Latency and survival
 
 ```{r m2a}
-# m2a: Does latency to reach food predict survival? To 90 days.
+# m2a: Does latency to reach food predict survival to 90 days?
 ## Violin plot
-ggplot(data, aes(x= to_90, y=sqrt(latency), group=to_90))+
+ggplot(data, aes(x= to_90, y =sqrt(latency), group=to_90))+
   geom_violin()+
   geom_point(size = 2)+
   labs(x= "Survival to 90-days post-release", 
@@ -414,14 +427,14 @@ ggplot(data, aes(x= to_90, y=sqrt(latency), group=to_90))+
   scale_x_continuous(breaks = c(0,1), labels = c(FALSE, TRUE))
 
 ## Logistic regression with binomial family
-m2a <- glm(to_90 ~ sqrt(latency),
+m2a <- glm(to_90 ~ scale(sqrt(latency)),
            data = data,
            family = binomial())
 
 summary(m2a)
 
 # Survival probability
-exp(coef(m1a))
+exp(coef(m2a))
 ```
 
 Only three birds (21%) died in the period to 90-days post-release. There is weak evidence (i.e. marginally significant prediction) that shorter latency periods predict survival. 
@@ -431,8 +444,6 @@ When latency approaches zero the chance of survival is 82% (based on the interce
 Model performance is imperfect, with non-normally distributed residuals. Given the management needs to balance risk and uncertainty during translocation, I would use this imperfect information to inform the translocation approach until better information can be gathered for adaptive management. Since lower latency *might* inform survival, and we want to reduce unnecessary mortality, this is a useful management tool. 
 
 Next, we looked at the effect of latency on survival to 1-year post-release. 
-
-*Does latency to reach food predict survival to 1-year post-release?*
 
 ```{r m2b}
 # m2b: Does latency to reach food predict survival? To 360 days.
@@ -447,7 +458,7 @@ ggplot(data, aes(x= to_360, y=sqrt(latency), group=to_360))+
   scale_x_continuous(breaks = c(0,1), labels = c(FALSE, TRUE))
 
 ## Logistic regression with binomial family
-m2b <- glm(to_360 ~ sqrt(latency),
+m2b <- glm(to_360 ~ scale(sqrt(latency)),
            data = data,
            family = binomial())
 
@@ -462,30 +473,44 @@ This highlights the importance of sampling period and the different drives of su
 
 In summary, latency only has a meaningful impact on short-term survival (to 90 days), not overall persistence across the 1-year study period. 
 
-## Handling response and survival
+### m3 Handling response and survival
 
 Since handling score is categorical, we'll use ANOVA and chi-squared to compare frequencies. 
 
-*Does handling response predict survival to 90-days post-release?*
-
-```{r m3a}
+```{r m3}
+# m3a: Does handling predict survival to 90 days?
+## Mosaic plot
 mosaicplot(table(data$to_90, data$score), 
            main = NULL, 
            xlab = "Survival to 90-days post-release",
            ylab = "Handling score")
 
+## Chisq test
 chisq.test(table(data$to_90, data$score))
-```
 
-*Does handling response predict survival to 1-year post-release?*
+## Logistic regression with binomial family
+m3a <- glm(to_90 ~ score,
+           data = data,
+           family = binomial())
 
-```{r m3b}
+summary(m3a)
+
+# m3b: Does handling predict survival to 1 year?
+## Mosaic plot
 mosaicplot(table(data$to_360, data$score), 
            main = NULL, 
            xlab = "Survival to 1-year post-release",
            ylab = "Handling score")
 
+## Chisq test
 chisq.test(table(data$to_360, data$score))
+
+## Logistic regression with binomial family
+m3b <- glm(to_360 ~ score,
+           data = data,
+           family = binomial())
+
+summary(m3b)
 ```
 
 While there is no evidence of a relationship between handling score and survival to 90-days, there is weak evidence of a relationship to 1-year.
@@ -505,12 +530,10 @@ Overall, there is weak evidence that handling score predicts persistence. In the
 
 In summary, handling score is a better predictor of long-term surival (1 year) than latency. 
 
-## Weight and survival
-
-The best predictor for survival in both periods was weight. I investigate this separately here. 
+### m4 Weight and survival
 
 ```{r m4}
-# m4a: Does weight predict survival? To 90 days.
+# m4a: Does weight predict survival to 90 days?
 ## Violin plot
 ggplot(data, aes(x= to_90, y=weight, group=to_90))+
   geom_violin()+
@@ -522,12 +545,12 @@ ggplot(data, aes(x= to_90, y=weight, group=to_90))+
   scale_x_continuous(breaks = c(0,1), labels = c(FALSE, TRUE))
 
 ## Logistic regression with binomial family
-m4a <- glm(to_90 ~ weight,
+m4a <- glm(to_90 ~ scale(weight),
            data = data,
            family = binomial())
 summary(m4a)
 
-# m4b: Does weight predict survival? To 1 year.
+# m4b: Does weight predict survival to 1 year?
 ## Violin plot
 ggplot(data, aes(x= to_360, y=weight, group=to_360))+
   geom_violin()+
@@ -539,18 +562,20 @@ ggplot(data, aes(x= to_360, y=weight, group=to_360))+
   scale_x_continuous(breaks = c(0,1), labels = c(FALSE, TRUE))
 
 ## Logistic regression with binomial family
-m4b <- glm(to_360 ~ weight,
+m4b <- glm(to_360 ~ scale(weight),
            data = data,
            family = binomial())
 summary(m4b)
 ```
 
-## Sex and survival
+No effect of weight on survival. 
+
+### m5 Sex and survival
 
 A predictor for survival to 1-year was sex I investigate this separately here. 
 
 ```{r m5}
-# m5a: Does weight predict survival? To 90 days.
+# m5a: Does sex predict survival? To 90 days.
 ## Mosaic plot
 mosaicplot(table(data$to_90, data$sex), 
            main = NULL, 
@@ -559,7 +584,14 @@ mosaicplot(table(data$to_90, data$sex),
 
 chisq.test(table(data$to_90, data$sex))
 
-# m5b: Does weight predict survival? To 1 year.
+## Logistic regression with binomial family
+m5a <- glm(to_90 ~ sex,
+           data = data,
+           family = binomial())
+
+summary(m5a)
+
+# m5b: Does sex predict survival? To 1 year.
 ## Mosaic plot
 mosaicplot(table(data$to_360, data$sex), 
            main = NULL, 
@@ -567,66 +599,233 @@ mosaicplot(table(data$to_360, data$sex),
            ylab = "Sex")
 
 chisq.test(table(data$to_360, data$sex))
+
+## Logistic regression with binomial family
+m5b <- glm(to_360 ~ sex,
+           data = data,
+           family = binomial())
+
+summary(m5b)
 ```
 
 Sex did not predict survival in either time period. The issue is there are only 2 males not surviving to 360 and none not surviving to 90 days. There isn't enough predictive power. But it is interesting to mention. I wonder if sex is coming up as important because the males are bigger and bigger birds are surviving better? 
 
+### Comparison
+
+Here I compare all the models on AICc (for small sample size).
+
+```{r aicc}
+# Comparison for 90 day period
+AICc(m1a, m2a, m3a, m4a, m5a)
+
+# Comparison for 1 year period
+AICc(m1b, m2b, m3b, m4b, m5b)
+```
+
+The best model for the 90 day period was sex as the predictor, followed by latency and weight. 
+
+The best model for the 1 year was sex as the predictor, followed by latency and handling response. 
+
 ## Survival analysis
 
-To look at persistence I am using a survival analysis approach, since 'persistence' is a time-to-event response. 
+Instead of looking at survival as a binary yes/no, we can also look at persistence as a continuous response. For this, I am using a survival analysis approach, since 'persistence' is a time-to-event response. 
 
-```{r hazard rate}
-# Bring in data and format as Surv() for Kaplan Meier Analysis
+### m6 Survival plot
+
+Start by looking at the overall survival probabilities for all birds. 
+
+```{r m6}
+# Format data for Kaplan Meier Analysis - where death is TRUE i.e. 1
 km <- data %>%
-  rename(time = persist,
-         status = to_360)
+  mutate(time = persist,
+         status = ifelse(to_360 == 0, 1, 0),
+         sex = as.factor(sex),
+         condition = as.factor(condition),
+         score = as.factor(score)) %>%
+  select(-c(persist, to_90, to_360))
 
-km_fit <- survfit(Surv(persist, to_360) ~ 1, km)
+# Fit a survival model
+m6 <- survfit(Surv(time, status) ~ 1, km)
 
-summary(km_fit, times = c(1,90, 180, 270, 359))
+# Estimated survival probabilities
+summary(m6, times = c(1,90, 180, 270, 360))
 
-plot(km_fit, xlab="Days", main = 'Kaplan Meyer Plot')
+# Kaplan Meyer Plot
+ggsurvplot(m6, data = km, risk.table = FALSE,
+           gtheme = theme_bw(),
+           censor = FALSE,
+           xlab = "Days post-release",
+           ylab = "Survival",
+           xlim = c(0,360),
+           palette = "grey20",
+           conf.int = FALSE)
+
 ```
 
+The probability of survival to 1 year is 43% (upper CI = 78%, lower CI = 23%). 
 
-First I plot the survival curve to see if the hazard rate is constant over time (although this is tough with n=14).
+### m7 Handling response and persistence 
 
-```{r hazard}
-# Add every day for survival
-surv <- data.frame()
+```{r m7}
+# Fit a survival model with handling as the grouping variable
+km7 <- survfit(Surv(time, status) ~ score, km)
 
-for(i in 1:length(birds)){
-  temp <- subset(survival, bird == birds[i]) %>%
-    mutate(start_date = as_date(start_date, format = "%d/%m/%Y"),
-           end_date = as_date(end_date, format = "%d/%m/%Y"))
+# Kaplan Meyer Plot
+ggsurvplot(km7, data = km, risk.table = FALSE,
+           gtheme = theme_bw(),
+           censor = FALSE,
+           xlab = "Days post-release",
+           ylab = "Survival",
+           xlim = c(0,360),
+           palette = c("grey20", "#83b0fc", "#f8766d"),
+           conf.int = FALSE)
 
-  temp2 <- data.frame(date = as_date(temp$start_date:as_date("2024-01-10"))) %>%
-  mutate(bird = birds[i],
-         status = ifelse(date<temp$end_date, 1, 0),
-         # Convert dates to numeric for use in Surv()
-         time = date - as_date(temp$start_date))
-  
-  surv <- rbind(surv, temp2)
-}
+# Test the difference between these survival curves
+survdiff(Surv(time, status) ~ score, km)
 
-hazard <- left_join(surv, data) %>%
-  dplyr::select(-c(persist, to_90, to_360, start_date, end_date))
-
-# Plot hazard rate 
-
-
-surv <- with(data, Surv(persist, to_360))
-
-
-plot(survfit(Surv(time, status) ~ 1, data = hazard))
-
-summary(survfit(Surv(time, status) ~ 1, data = hazard))
-
-test <- coxph(Surv(time, status) ~ scale(latency) + score, data = hazard)
-
-summary(test)
-plot_model()
-plot_model(test, type = "pred")
+# Test as a Cox Proportional Hazard model 
+m7 <- coxph(Surv(time, status) ~ score, km)
+summary(m7)
 ```
 
-The hazard rate is approximately linear (i.e., constant), so we should be able to use a Cox proportional hazard model rather than a parametric survival model. 
+We have different survival curves for the 3 handling score groups, but overall the difference between the curves is not significant (model convergence problems due to low group sizes: only 2 individuals in score 3).
+
+### m8 Sex and persistence 
+
+```{r m8}
+# Fit a survival model with sex as the grouping variable
+km8 <- survfit(Surv(time, status) ~ sex, km)
+
+# Kaplan Meyer Plot
+ggsurvplot(km8, data = km, risk.table = FALSE,
+           gtheme = theme_bw(),
+           censor = FALSE,
+           xlab = "Days post-release",
+           ylab = "Survival",
+           xlim = c(0,360),
+           conf.int = FALSE)
+
+# Test the difference between these survival curves
+survdiff(Surv(time, status) ~ sex, km)
+
+# Test as a Cox Proportional Hazard model 
+m8 <- coxph(Surv(time, status) ~ sex, km)
+summary(m8)
+```
+
+Significant logrank test. The difference between the curves is weakly significant. Females are less likely to survive. 
+
+### m9 Condition and persistence  
+
+```{r m9}
+# Fit a survival model with condition as the grouping variable
+km9 <- survfit(Surv(time, status) ~ condition, km)
+
+# Kaplan Meyer Plot
+ggsurvplot(km9, data = km, risk.table = FALSE,
+           gtheme = theme_bw(),
+           censor = FALSE,
+           xlab = "Days post-release",
+           ylab = "Survival",
+           xlim = c(0,360),
+           conf.int = FALSE)
+
+# Test the difference between these survival curves
+survdiff(Surv(time, status) ~ condition, km)
+
+# Test as a Cox Proportional Hazard model 
+m9 <- coxph(Surv(time, status) ~ condition, km)
+summary(m9)
+```
+
+No difference between good and excellent condition. 
+
+The last grouping variable is age but can't use this since only one individual in age 1.
+
+### m10 Latency and persistence 
+
+```{r m10}
+# Fit a survival model with latency as the continuous variable
+m10 <- coxph(Surv(time, status) ~ sqrt(latency), km, x= TRUE)
+
+# Plot the survival area
+plot_surv_area(model = m10, data = km,
+               time = "time", status = "status", variable = "latency", group = NULL)
+
+# Test effect of latency - log rank test
+summary(m10)
+```
+
+Weak evidence for effect of latency (on the log rank test). Visually, shorter latency periods have higher survival likelihoods.
+
+### m11 Alert behaviour and persistence 
+
+```{r m11}
+# Fit a survival model with alert behaviour as the continuous variable
+m11 <- coxph(Surv(time, status) ~ alert, km, x= TRUE)
+
+# Plot the survival area
+plot_surv_area(model = m11, data = km,
+               time = "time", status = "status", variable = "alert", group = NULL)
+
+# Test effect of alert behaviour - log rank test
+summary(m11)
+```
+
+No effect of alertness on survival.
+
+### m12 Weight and persistence 
+
+```{r m12}
+# m12 a survival model with weight as the continuous variable
+m12 <- coxph(Surv(time, status) ~ weight, km, x= TRUE)
+
+# Plot the survival area
+plot_surv_area(model = m12, data = km,
+               time = "time", status = "status", variable = "weight", group = NULL)
+
+# Test effect of weight - log rank test
+summary(m12)
+```
+
+Not significant - but the heavier birds survive better. 
+
+What if we combine sex and weight?
+
+### m13 Sex * weight and persistence 
+
+```{r m13}
+# Fit a survival model with weight and sex
+m13 <- coxph(Surv(time, status) ~ weight * sex, km, x= TRUE)
+
+# Plot the survival area
+plot_surv_area(model = m13, data = km,
+               time = "time", status = "status", variable = "weight", group = "sex")
+
+# Test effect of alert behaviour - log rank test
+summary(m13)
+
+# Plot for paper
+ggplot(data, aes(x= to_360, y=weight, group=to_360, colour = sex))+
+  geom_violin()+
+  geom_point(size = 2)+
+  labs(x= "Survival to 1 year post-release", 
+       y = "Pre-release weight")+
+  facet_wrap(~sex)+
+  theme(panel.grid.minor = element_blank())+
+  scale_x_continuous(breaks = c(0,1), labels = c(FALSE, TRUE))
+
+# Plot for paper
+data$to_360 <- factor(data$to_360, labels = c("FALSE", "TRUE"))
+ggplot(data)+
+  geom_violin(aes(x = to_360, y=weight, colour =  sex))+
+  geom_point(aes(x= to_360, y=weight, colour = sex), size = 2)+
+  facet_wrap(~sex)+
+  theme_bw()+
+  labs(x= "Survival to 1 year post-release",
+       y = "Pre-release weight")+
+  theme(panel.grid.minor = element_blank(),
+        legend.position = "none")
+```
+
+Combined effects significant - heavier females more likely to survive, whereas smaller males survive regardless. 
