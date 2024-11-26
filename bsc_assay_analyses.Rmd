@@ -259,6 +259,19 @@ Interestingly, the amount of time spent 'alert' (yellows and greens) seems (visu
 
 The 'alert' metric is close to normally distributed. 
 
+## Assay correlation
+
+Are these metrics related? I.e. are there consistency within individuals in the types of responses across the different measures. 
+
+```{r correlated assay}
+m0 <- glm(score ~ alert * latency,
+          data = data)
+
+summary(m0)
+```
+
+Assays seem to be unrelated - so are measuring different things. 
+
 ## Traits
 
 I included some non-behavioural trait predictors to compare with the assays predictions. These included life-history and morphological traits.
