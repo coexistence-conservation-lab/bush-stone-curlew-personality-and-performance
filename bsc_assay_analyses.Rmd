@@ -49,6 +49,8 @@ latency <- read_excel("Input/bsc assay data.xlsx", sheet =3) %>%
   clean_names() %>%
   # Select study birds
   filter(bird %in% birds) %>%
+  # Format dates
+  mutate(date = as_date(date)) %>%
   # Filter to assay dates
   filter(date %in% c("2022-10-12", "2022-10-11")) %>%
   dplyr::select(c("date", "bird", "reach", "latency_s")) %>%
@@ -118,6 +120,8 @@ handling <- read_excel("Input/bsc assay data.xlsx", sheet = 7) %>%
   rename(bird = identity) %>%
   # Filter to study birds
   filter(bird %in% birds) %>%
+  # Format dates
+  mutate(date = as_date(date)) %>%
   # Filter to assay dates
   filter(date %in% c("2022-10-20")) %>%
   # Drop unneeded columns
@@ -356,7 +360,6 @@ We tested survival to both 90-days and 1-year post-release becasue we wanted to 
 survival <- read.csv("Input/survival.csv") %>%
   clean_names() %>%
   rename(bird = identity) %>%
-  filter(bird %in% birds) %>%
   # Limit persistence value to minimum common tracked time of 360
   mutate(persist = ifelse(persist>360, 360, persist)) %>%
   # Convert true and false to 0 and 1
@@ -378,6 +381,13 @@ write.csv(data, row.names = FALSE, "data_table.csv")
 ```
 
 # Analyses
+
+```{r}
+# read in data
+data <- read_csv("data_table.csv") %>%
+  # drop Star and Daisy
+  filter(!bird %in% c("Daisy", "Star"))
+```
 
 ## Binary survival
 
@@ -747,6 +757,9 @@ m10 <- coxph(Surv(time, status) ~ sqrt(latency), km, x= TRUE)
 plot_surv_area(model = m10, data = km,
                time = "time", status = "status", variable = "latency", group = NULL)
 
+# and with survminer for ggplot
+survminer::ggsurvplot(fit = m10, data = km)
+
 # Test effect of latency - log rank test
 summary(m10)
 ```
@@ -824,3 +837,79 @@ ggplot(data)+
 ```
 
 Combined effects significant - heavier females more likely to survive, whereas smaller males survive regardless. 
+
+# Figures
+
+Making some nicer looking figures for publication here. 
+
+```{r}
+# read in data
+data <- read_csv("data_table.csv") %>%
+  # drop Star and Daisy
+  filter(!bird %in% c("Daisy", "Star")) %>%
+  # rename period labels to look nicer on graphs
+  rename("90 days" = to_90,
+         "1 year" = to_360) %>%
+  # pivot wider on period
+  pivot_longer(3:4, names_to = "period", values_to = "survived") %>%
+  # survival as factors
+  mutate(period = as_factor(period),
+         survived = as_factor(survived))
+```
+
+First a violin plot with the continuous variables (latency to reach food, time alert and weight) for the two time periods.
+
+```{r}
+# default theme options for all plots
+theme <- function(){
+  list(
+    geom_violin(),
+    geom_point(),
+    facet_wrap(~period),
+    xlab(element_blank()),
+    theme_classic(),
+    scale_x_discrete(labels = c("Died", "Survived")),
+    ggplot2::theme(axis.title.y = element_text(size = 11))
+  )
+}
+
+# list of plots
+g1 <- ggplot(data, aes(survived, latency))+
+  ylab("Latency to reach food (s)")+
+  theme()
+
+g2 <- ggplot(data, aes(survived, alert))+
+  ylab("Time spent alert %")+
+  theme()
+
+g3 <- ggplot(data, aes(survived, weight))+
+  ylab("Pre-release weight (g)")+
+  theme()
+
+g4 <- ggplot(data, aes(x = survived, y = weight, color = sex)) +
+  ylab("Pre-release weight (g)") +
+  geom_violin(aes(group = interaction(survived, sex, period)), 
+              position = position_dodge(width = 0.9)) +
+  geom_point(aes(group = interaction(survived, sex, period)), 
+             position = position_dodge(width = 0.9)) +
+  facet_wrap(~period) +
+  scale_colour_manual(values = c("#298c8c", "#f1a226"))+
+  xlab(element_blank()) +
+  theme_classic()+
+  scale_x_discrete(labels = c("Died", "Survived"))+
+  ggplot2::theme(axis.title.y = element_text(size = 11))
+
+# arrange multi plot
+ggarrange(g1, g2, g3, g4,
+          ncol = 2, nrow = 2,
+          labels = c("A", "B", "C", "D"),
+          common.legend = TRUE,
+          legend = "bottom")
+```
+
+Next a mosaic plot with the categorical variables (handling score and sex) for the two time periods.
+
+```{r}
+
+```
+
