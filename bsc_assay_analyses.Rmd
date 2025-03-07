@@ -11,7 +11,7 @@ editor_options:
 knitr::opts_chunk$set(echo = TRUE)
 
 # Load packages
-pacman::p_load(beepr, contsurvplot, ggpubr, janitor, MuMIn, performance, readxl, sjPlot, survival, survminer, tidyverse)
+pacman::p_load(beepr, contsurvplot, ggpubr, janitor, MuMIn, patchwork, performance, readxl, sjPlot, survival, survminer, tidyverse)
 
 # Bird list excluding Daisy (returned to captivity) & Star (disease fate)
 birds <- c("Briar", "Nutmeg", "Aurora", "Robin",
@@ -844,7 +844,7 @@ Making some nicer looking figures for publication here.
 
 ```{r}
 # read in data
-data <- read_csv("data_table.csv") %>%
+data <- read_csv("data_table.csv", show_col_types = FALSE) %>%
   # drop Star and Daisy
   filter(!bird %in% c("Daisy", "Star")) %>%
   # rename period labels to look nicer on graphs
@@ -852,12 +852,26 @@ data <- read_csv("data_table.csv") %>%
          "1 year" = to_360) %>%
   # pivot wider on period
   pivot_longer(3:4, names_to = "period", values_to = "survived") %>%
+  rename(Survival = survived) %>%
   # survival as factors
   mutate(period = as_factor(period),
-         survived = as_factor(survived))
+         Survival = factor(Survival, levels = c("1", "0"))) %>%
+  # add interaction factors for colour scales
+   mutate(sex_survival = factor(interaction(sex, Survival), 
+                                levels = c("Female.1", "Female.0", "Male.1", "Male.0")))
+
+# and separately format data for survival analysis
+data2 <- data <- read_csv("data_table.csv", show_col_types = FALSE) %>%
+  # drop Star and Daisy
+  filter(!bird %in% c("Daisy", "Star")) %>%
+  mutate(time = persist,
+         status = ifelse(to_360 == 0, 1, 0),
+         sex = factor(sex),
+         score = factor(score)) %>%
+  select(-c(persist, to_90, to_360))
 ```
 
-First a violin plot with the continuous variables (latency to reach food, time alert and weight) for the two time periods.
+The binary survival yes/no to 90 days and 1 year for all variables (continuous as violin and categorical as mosaic). 
 
 ```{r}
 # default theme options for all plots
@@ -874,42 +888,81 @@ theme <- function(){
 }
 
 # list of plots
-g1 <- ggplot(data, aes(survived, latency))+
+g1 <- ggplot(data, aes(Survival, latency))+
   ylab("Latency to reach food (s)")+
   theme()
 
-g2 <- ggplot(data, aes(survived, alert))+
+g2 <- ggplot(data, aes(Survival, alert))+
   ylab("Time spent alert %")+
   theme()
 
-g3 <- ggplot(data, aes(survived, weight))+
+g3 <- ggplot(data, aes(Survival, weight))+
   ylab("Pre-release weight (g)")+
   theme()
 
-g4 <- ggplot(data, aes(x = survived, y = weight, color = sex)) +
+g4 <- ggplot(data, aes(x = Survival, y = weight, color = sex)) +
   ylab("Pre-release weight (g)") +
-  geom_violin(aes(group = interaction(survived, sex, period)), 
+  geom_violin(aes(group = interaction(Survival, sex, period)), 
               position = position_dodge(width = 0.9)) +
-  geom_point(aes(group = interaction(survived, sex, period)), 
+  geom_point(aes(group = interaction(Survival, sex, period)), 
              position = position_dodge(width = 0.9)) +
   facet_wrap(~period) +
-  scale_colour_manual(values = c("#298c8c", "#f1a226"))+
+  scale_colour_manual(values = c("#298c8c", "#f1a226"),
+                      name = "Sex")+
   xlab(element_blank()) +
   theme_classic()+
   scale_x_discrete(labels = c("Died", "Survived"))+
   ggplot2::theme(axis.title.y = element_text(size = 11))
 
-# arrange multi plot
-ggarrange(g1, g2, g3, g4,
-          ncol = 2, nrow = 2,
-          labels = c("A", "B", "C", "D"),
-          common.legend = TRUE,
-          legend = "bottom")
+g5 <- ggplot(data)+
+  geom_histogram(aes(x = score, fill = Survival), stat = "count", position = "fill")+
+  theme_classic() +
+  scale_fill_manual(values = c("gray", "gray5"), 
+                    labels = c("Survived", "Died"),
+                    name = "Survival") +
+  facet_wrap(~period) +
+  xlab("Handling score") +
+  ylab("Survival proportion")+
+  ggplot2::theme(axis.title.y = element_text(size = 11))
+
+g6 <- ggplot(data)+
+  geom_histogram(aes(x = sex, fill = sex_survival), stat = "count", position = "fill")+
+  theme_classic() +
+  scale_fill_manual(values = c("#298c8c", "#001a1a", 
+                               "#f1a226", "#1f1500"), 
+                    labels = c("Female-Survived", "Female-Died",
+                               "Male-Survived", "Male-Died"),
+                    name = "Sex and Survival") +
+  facet_wrap(~period) +
+  xlab("Sex") +
+  ylab("Survival proportion")+
+  ggplot2::theme(axis.title.y = element_text(size = 11))
+
+# arrange multi plot - moved from ggarrange to patchwork, seems to work better
+combined_plot <- (g1 + g2) / (g3 + g4) / (g5 + g6) + 
+  plot_layout(guides = "collect") +
+  plot_annotation(tag_levels = 'A')
+combined_plot
 ```
 
-Next a mosaic plot with the categorical variables (handling score and sex) for the two time periods.
+Second, the continuous persistence variables
 
 ```{r}
+# fit survival curves
+latency <- survfit(Surv(time, status) ~ sqrt(latency), data2)
+
+ggsurvplot(latency, data2)
+
+
+m10 <- coxph(Surv(time, status) ~ sqrt(latency), data2, x= TRUE)
+
+# Plot the survival area
+plot_surv_area(model = m10, data = data2,
+               time = "time", status = "status", variable = "latency", group = NULL) %>%
+  ggsurvplot()
+
+# and with survminer for ggplot
+survminer::ggsurvplot(m10, data = data2)
 
 ```
 
