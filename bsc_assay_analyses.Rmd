@@ -11,7 +11,7 @@ editor_options:
 knitr::opts_chunk$set(echo = TRUE)
 
 # Load packages
-pacman::p_load(beepr, contsurvplot, ggpubr, janitor, MuMIn, patchwork, performance, readxl, sjPlot, survival, survminer, tidyverse)
+pacman::p_load(beepr, contsurvplot, ggpubr, glmmTMB, janitor, MuMIn, patchwork, performance, readxl, sjPlot, survival, survminer, tidyverse)
 
 # Bird list excluding Daisy (returned to captivity) & Star (disease fate)
 birds <- c("Briar", "Nutmeg", "Aurora", "Robin",
@@ -65,12 +65,11 @@ ggplot(latency) +
   geom_bar(aes(bird, latency, fill = as.character(date)), 
            position = "dodge", stat = "identity")+
   geom_text(aes(y=600, x= bird, label = label), angle = 90, vjust = -0.5)+
-  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
   labs(x= element_blank(), y = "Latency to reach food (seconds)")+
   scale_x_discrete(guide = guide_axis(angle = 45)) +
   scale_fill_manual(values = c("#881C00FF","#1BB6AFFF"), name = "Assay date")+
   theme_minimal()+
-  theme(panel.grid.minor = element_blank())
+  ggplot2::theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
 ```
 
 We need to account for repeat measures but due to low sample size we cannot use bird as a random factor (model convergence issues when tested). So instead, we are going to use the mean latency. The birds didn't reach the food on one third of occasions, but all birds reached the food at least once (out of two trials).
@@ -85,12 +84,11 @@ mlatency <- latency %>%
 # Plot mean latency by bird
 ggplot(mlatency) + 
   geom_bar(aes(bird, latency), position = "dodge", stat = "identity")+
-  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
   labs(x= element_blank(), y = "Mean latency to reach food (seconds)")+
   scale_x_discrete(guide = guide_axis(angle = 45)) +
   scale_fill_manual(values = c("#881C00FF","#1BB6AFFF"), name = "Assay date")+
   theme_minimal()+
-  theme(panel.grid.minor = element_blank())
+  ggplot2::theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
 
 # Check the distribution of mean latency
 hist(mlatency$latency)
@@ -132,7 +130,7 @@ ggplot(handling)+
   geom_bar(aes(score))+
   scale_y_continuous(breaks =c(1,3,5,7,9))+
   theme_minimal()+
-  theme(panel.grid.minor = element_blank())
+  ggplot2::theme(panel.grid.minor = element_blank())
 ```
 
 Most birds (64%) had a handling score of 1, with 21% a score of 2 and just two individuals (14%) with a score of 3. 
@@ -221,7 +219,7 @@ ggplot(behaviour) +
        y = "Proportion of time spent in each behaviour")+
   scale_x_discrete(guide = guide_axis(angle = 45)) +
   theme_minimal()+
-  theme(panel.grid.major = element_blank(), 
+  ggplot2::theme(panel.grid.major = element_blank(), 
         panel.grid.minor = element_blank(),
         axis.text.y = element_blank())+
   scale_fill_viridis_d(direction = -1)
@@ -248,7 +246,7 @@ ggplot(prop_behav) +
        y = "Proportion of time spent in alert behaviours")+
   scale_x_discrete(guide = guide_axis(angle = 45)) +
   theme_minimal()+
-  theme(panel.grid.minor = element_blank())
+  ggplot2::theme(panel.grid.minor = element_blank())
 
 # Check distribution of behaviours
 hist(prop_behav$alert)
@@ -345,7 +343,7 @@ I didn't end up using the morphometric data in the models due to convergence iss
 
 # Responses
 
-We tracked birds with GPS devices to determine their fate. The GPS devices were removed in January 2024. Because different cohorts were released at different times (October, December or January), the maximum tracked duration is 360 days. 
+We tracked birds with GPS devices to determine their fate. The GPS devices were removed in January 2024. Because different cohorts were released at different times (October, December or January), the maximum tracked duration is 363 days (which we call a year, close enough)
 
 We assessed survival in three ways:
 
@@ -361,12 +359,12 @@ survival <- read.csv("Input/survival.csv") %>%
   clean_names() %>%
   rename(bird = identity) %>%
   # Limit persistence value to minimum common tracked time of 360
-  mutate(persist = ifelse(persist>360, 360, persist)) %>%
+  mutate(persist = ifelse(persist>363, 363, persist)) %>%
   # Convert true and false to 0 and 1
   mutate(to_90 = ifelse(to_90 == FALSE, 0, 1),
-         to_360 = ifelse(to_360 == FALSE, 0, 1)) %>%
+         to_363 = ifelse(to_360 == FALSE, 0, 1)) %>%
 # Drop unneeded columns
-  dplyr::select(c(bird, persist, to_90, to_360))
+  dplyr::select(c(bird, persist, to_90, to_363))
 
 # Combine survival with all predictors
 data <- left_join(survival, mlatency) %>%
@@ -377,14 +375,14 @@ data <- left_join(survival, mlatency) %>%
   dplyr::select(-c(A, C, E, F, HB, HT, N, O, P, S, TW, W, D, I))
 
 # Write table to file
-write.csv(data, row.names = FALSE, "data_table.csv")
+write.csv(data, row.names = FALSE, "Output/data_table.csv")
 ```
 
 # Analyses
 
 ```{r}
 # read in data
-data <- read_csv("data_table.csv") %>%
+data <- read_csv("Output/data_table.csv") %>%
   # drop Star and Daisy
   filter(!bird %in% c("Daisy", "Star"))
 ```
@@ -404,7 +402,7 @@ ggplot(data, aes(x= to_90, y = alert, group=to_90))+
   labs(x= "Survival to 90-days post-release", 
        y = "Proportion of time spent alert")+
   theme_minimal()+
-  theme(panel.grid.minor = element_blank())+
+  ggplot2::theme(panel.grid.minor = element_blank())+
   scale_x_continuous(breaks = c(0,1), labels = c(FALSE, TRUE))
 
 ## Logistic regression with binomial family
@@ -416,7 +414,7 @@ summary(m1a)
 
 # m1b: Does proportion of time spent alert predict survival to 1 year?
 ## Violin plot
-ggplot(data, aes(x= to_360, y = alert, group=to_360))+
+ggplot(data, aes(x= to_363, y = alert, group=to_363))+
   geom_violin()+
   geom_point(size = 2)+
   labs(x= "Survival to 1 year post-release", 
@@ -426,7 +424,7 @@ ggplot(data, aes(x= to_360, y = alert, group=to_360))+
   scale_x_continuous(breaks = c(0,1), labels = c(FALSE, TRUE))
 
 ## Logistic regression with binomial family
-m1b <- glm(to_360 ~ scale(alert),
+m1b <- glm(to_363 ~ scale(alert),
            data = data,
            family = binomial())
 
@@ -456,8 +454,6 @@ m2a <- glm(to_90 ~ scale(sqrt(latency)),
 
 summary(m2a)
 
-confint(m2a)
-
 # Survival probability
 exp(coef(m2a))
 ```
@@ -471,9 +467,9 @@ Model performance is imperfect, with non-normally distributed residuals. Given t
 Next, we looked at the effect of latency on survival to 1-year post-release. 
 
 ```{r m2b}
-# m2b: Does latency to reach food predict survival? To 360 days.
+# m2b: Does latency to reach food predict survival? To 1 year.
 ## Violin plot
-ggplot(data, aes(x= to_360, y=sqrt(latency), group=to_360))+
+ggplot(data, aes(x= to_363, y=sqrt(latency), group=to_363))+
   geom_violin()+
   geom_point(size = 2)+
   labs(x= "Survival to 1-year post-release", 
@@ -483,13 +479,11 @@ ggplot(data, aes(x= to_360, y=sqrt(latency), group=to_360))+
   scale_x_continuous(breaks = c(0,1), labels = c(FALSE, TRUE))
 
 ## Logistic regression with binomial family
-m2b <- glm(to_360 ~ scale(sqrt(latency)),
+m2b <- glm(to_363 ~ scale(sqrt(latency)),
            data = data,
            family = binomial())
 
 summary(m2b)
-
-confint(m2b)
 ```
 
 Just under half of the birds (42%, n = 6) survived to the 1-year post-release period. The chance of survival increases with decreasing latency values. However, unlike for 90-days, the effect is not significant. This could indicate that latency has a more immediate impact on short-term survival but less influence on long-term survival.
@@ -519,13 +513,13 @@ m3a
 
 # m3b: Does handling predict survival to 1 year?
 ## Mosaic plot
-mosaicplot(table(data$to_360, data$score), 
+mosaicplot(table(data$to_363, data$score), 
            main = NULL, 
            xlab = "Survival to 1-year post-release",
            ylab = "Handling score")
 
 ## Chisq test
-m3b <- chisq.test(table(data$to_360, data$score))
+m3b <- chisq.test(table(data$to_363, data$score))
 
 m3b
 ```
@@ -569,7 +563,7 @@ summary(m4a)
 
 # m4b: Does weight predict survival to 1 year?
 ## Violin plot
-ggplot(data, aes(x= to_360, y=weight, group=to_360))+
+ggplot(data, aes(x= to_363, y=weight, group=to_363))+
   geom_violin()+
   geom_point(size = 2)+
   labs(x= "Survival to 1-year post-release", 
@@ -579,7 +573,7 @@ ggplot(data, aes(x= to_360, y=weight, group=to_360))+
   scale_x_continuous(breaks = c(0,1), labels = c(FALSE, TRUE))
 
 ## Logistic regression with binomial family
-m4b <- glm(to_360 ~ scale(weight),
+m4b <- glm(to_363 ~ scale(weight),
            data = data,
            family = binomial())
 summary(m4b)
@@ -608,235 +602,114 @@ m5a <- glm(to_90 ~ sex,
 
 summary(m5a)
 
-confint(m5a)
-
 # m5b: Does sex predict survival? To 1 year.
 ## Mosaic plot
-mosaicplot(table(data$to_360, data$sex), 
+mosaicplot(table(data$to_363, data$sex), 
            main = NULL, 
            xlab = "Survival to 1-year post-release",
            ylab = "Sex")
 
-chisq.test(table(data$to_360, data$sex))
+chisq.test(table(data$to_363, data$sex))
 
 ## Logistic regression with binomial family
-m5b <- glm(to_360 ~ sex,
+m5b <- glm(to_363 ~ sex,
            data = data,
            family = binomial())
 
 summary(m5b)
-
-confint(m5b)
 ```
 
-Sex did not predict survival in either time period. The issue is there are only 2 males not surviving to 360 and none not surviving to 90 days. There isn't enough predictive power. But it is interesting to mention. I wonder if sex is coming up as important because the males are bigger and bigger birds are surviving better? 
+Sex did not predict survival in either time period. The issue is there are only 2 males not surviving to 1 year and none not surviving to 90 days. There isn't enough predictive power. But it is interesting to mention. I wonder if sex is coming up as important because the males are bigger and bigger birds are surviving better? 
 
 ## Survival analysis
 
 Instead of looking at survival as a binary yes/no, we can also look at persistence as a continuous response. For this, I am using a survival analysis approach, since 'persistence' is a time-to-event response. 
 
-### m6 Survival plot
+Note: cannot test handling response due to model convergence issues (too few members per group).
+
+```{r}
+# Format data for Kaplan Meier Analysis - where death is TRUE i.e. 1
+km <- data %>%
+  mutate(time = persist,
+         status = ifelse(to_363 == 0, 1, 0),
+         sex = as.factor(sex),
+         condition = as.factor(condition),
+         score = as.factor(score)) %>%
+  select(-c(persist, to_90, to_363))
+```
+
+### m6 Survival (all)
 
 Start by looking at the overall survival probabilities for all birds. 
 
 ```{r m6}
-# Format data for Kaplan Meier Analysis - where death is TRUE i.e. 1
-km <- data %>%
-  mutate(time = persist,
-         status = ifelse(to_360 == 0, 1, 0),
-         sex = as.factor(sex),
-         condition = as.factor(condition),
-         score = as.factor(score)) %>%
-  select(-c(persist, to_90, to_360))
-
 # Fit a survival model
 m6 <- survfit(Surv(time, status) ~ 1, km)
 
 # Estimated survival probabilities
 summary(m6, times = c(1,90, 180, 270, 360))
-
-# Kaplan Meyer Plot
-ggsurvplot(m6, data = km, risk.table = FALSE,
-           gtheme = theme_bw(),
-           censor = FALSE,
-           xlab = "Days post-release",
-           ylab = "Survival",
-           xlim = c(0,360),
-           palette = "grey20",
-           conf.int = FALSE)
-
 ```
 
 The probability of survival to 1 year is 43% (upper CI = 78%, lower CI = 23%). 
 
-### m7 Handling response and persistence 
-
-```{r m7}
-# Fit a survival model with handling as the grouping variable
-km7 <- survfit(Surv(time, status) ~ score, km)
-
-# Kaplan Meyer Plot
-ggsurvplot(km7, data = km, risk.table = FALSE,
-           gtheme = theme_bw(),
-           censor = FALSE,
-           xlab = "Days post-release",
-           ylab = "Survival",
-           xlim = c(0,360),
-           palette = c("grey20", "#83b0fc", "#f8766d"),
-           conf.int = FALSE)
-
-# Test the difference between these survival curves - log rank test
-survdiff(Surv(time, status) ~ score, km)
-
-# Test as a Cox Proportional Hazard model 
-m7 <- coxph(Surv(time, status) ~ score, km)
-summary(m7)
-```
-
-We have different survival curves for the 3 handling score groups, but overall the difference between the curves is not significant (model convergence problems due to low group sizes: only 2 individuals in score 3).
-
-### m8 Sex and persistence 
-
-```{r m8}
-# Fit a survival model with sex as the grouping variable
-km8 <- survfit(Surv(time, status) ~ sex, km)
-
-# Kaplan Meyer Plot
-ggsurvplot(km8, data = km, risk.table = FALSE,
-           gtheme = theme_bw(),
-           censor = FALSE,
-           xlab = "Days post-release",
-           ylab = "Survival",
-           xlim = c(0,360),
-           conf.int = FALSE)
-
-# Test the difference between these survival curves - log rank test
-survdiff(Surv(time, status) ~ sex, km)
-
-# Test as a Cox Proportional Hazard model 
-m8 <- coxph(Surv(time, status) ~ sex, km)
-summary(m8)
-```
-
-The difference between the curves is weakly significant. Females are less likely to survive. 
-
-### m9 Condition and persistence  
-
-```{r m9}
-# Fit a survival model with condition as the grouping variable
-km9 <- survfit(Surv(time, status) ~ condition, km)
-
-# Kaplan Meyer Plot
-ggsurvplot(km9, data = km, risk.table = FALSE,
-           gtheme = theme_bw(),
-           censor = FALSE,
-           xlab = "Days post-release",
-           ylab = "Survival",
-           xlim = c(0,360),
-           conf.int = FALSE)
-
-# Test the difference between these survival curves
-survdiff(Surv(time, status) ~ condition, km)
-
-# Test as a Cox Proportional Hazard model 
-m9 <- coxph(Surv(time, status) ~ condition, km)
-summary(m9)
-```
-
-No difference between good and excellent condition. 
-
-The last grouping variable is age but can't use this since only one individual in age 1.
-
-### m10 Latency and persistence 
+### m7 Latency and persistence 
 
 ```{r m10}
 # Fit a survival model with latency as the continuous variable
-m10 <- coxph(Surv(time, status) ~ sqrt(latency), km, x= TRUE)
+m7 <- coxph(Surv(time, status) ~ sqrt(latency), km, x= TRUE)
 
 # Plot the survival area
-plot_surv_area(model = m10, data = km,
+plot_surv_area(model = m7, data = km,
                time = "time", status = "status", variable = "latency", group = NULL)
 
-# and with survminer for ggplot
-survminer::ggsurvplot(fit = m10, data = km)
-
 # Test effect of latency - log rank test
-summary(m10)
+summary(m7)
 ```
 
-Evidence for effect of latency (on the log rank test). Visually, shorter latency periods have higher survival likelihoods.
+Evidence for effect of latency, where shorter latency periods have higher survival likelihoods.
 
-### m11 Alert behaviour and persistence 
+### m8 Alert behaviour and persistence 
 
 ```{r m11}
 # Fit a survival model with alert behaviour as the continuous variable
-m11 <- coxph(Surv(time, status) ~ alert, km, x= TRUE)
+m8 <- coxph(Surv(time, status) ~ alert, km, x= TRUE)
 
 # Plot the survival area
-plot_surv_area(model = m11, data = km,
+plot_surv_area(model = m8, data = km,
                time = "time", status = "status", variable = "alert", group = NULL)
 
 # Test effect of alert behaviour - log rank test
-summary(m11)
+summary(m8)
 ```
 
 No effect of alertness on survival.
 
-### m12 Weight and persistence 
+### m9 Sex, weight and persistence 
 
 ```{r m12}
-# m12 a survival model with weight as the continuous variable
-m12 <- coxph(Surv(time, status) ~ weight, km, x= TRUE)
+# Weight
+m9a <- coxph(Surv(time, status) ~ weight, km, x= TRUE)
+summary(m9a)
 
-# Plot the survival area
-plot_surv_area(model = m12, data = km,
-               time = "time", status = "status", variable = "weight", group = NULL)
-
-# Test effect of weight - log rank test
-summary(m12)
+# Sex
+m9b <- coxph(Surv(time, status) ~ sex, km)
+summary(m9b)
 ```
 
-Not significant - but the heavier birds survive better. 
+Weight and sex alone do not explain persistence. However, visually, it looks like bigger females survive better while the opposite is true for males. So it might be better to combine weight * sex. 
 
-What if we combine sex and weight?
-
-### m13 Sex * weight and persistence 
-
-```{r m13}
-# Fit a survival model with weight and sex
-m13 <- coxph(Surv(time, status) ~ sex * weight, km, x= TRUE)
+```{r}
+m9c <- coxph(Surv(time, status) ~ weight * sex, km, x= TRUE)
 
 # Plot the survival area
-plot_surv_area(model = m13, data = km,
+plot_surv_area(model = m9c, data = km,
                time = "time", status = "status", variable = "weight", group = "sex")
 
-# log rank test
-summary(m13)
-
-# Plot for paper
-ggplot(data, aes(x= to_360, y=weight, group=to_360, colour = sex))+
-  geom_violin()+
-  geom_point(size = 2)+
-  labs(x= "Survival to 1 year post-release", 
-       y = "Pre-release weight")+
-  facet_wrap(~sex)+
-  theme(panel.grid.minor = element_blank())+
-  scale_x_continuous(breaks = c(0,1), labels = c(FALSE, TRUE))
-
-# Plot for paper
-data$to_360 <- factor(data$to_360, labels = c("FALSE", "TRUE"))
-ggplot(data)+
-  geom_violin(aes(x = to_360, y=weight, colour =  sex))+
-  geom_point(aes(x= to_360, y=weight, colour = sex), size = 2)+
-  facet_wrap(~sex)+
-  theme_bw()+
-  labs(x= "Survival to 1 year post-release",
-       y = "Pre-release weight")+
-  theme(panel.grid.minor = element_blank(),
-        legend.position = "none")
+# Test effect of weight - log rank test
+summary(m9c)
 ```
 
-Combined effects significant - heavier females more likely to survive, whereas smaller males survive regardless. 
+Combined effects significant.
 
 # Figures
 
@@ -844,31 +717,29 @@ Making some nicer looking figures for publication here.
 
 ```{r}
 # read in data
-data <- read_csv("data_table.csv", show_col_types = FALSE) %>%
+data <- read_csv("Output/data_table.csv", show_col_types = FALSE) %>%
   # drop Star and Daisy
   filter(!bird %in% c("Daisy", "Star")) %>%
   # rename period labels to look nicer on graphs
   rename("90 days" = to_90,
-         "1 year" = to_360) %>%
+         "1 year" = to_363) %>%
   # pivot wider on period
   pivot_longer(3:4, names_to = "period", values_to = "survived") %>%
   rename(Survival = survived) %>%
-  # survival as factors
+  # categorical variables as factors
   mutate(period = as_factor(period),
-         Survival = factor(Survival, levels = c("1", "0"))) %>%
-  # add interaction factors for colour scales
-   mutate(sex_survival = factor(interaction(sex, Survival), 
-                                levels = c("Female.1", "Female.0", "Male.1", "Male.0")))
+         score = as_factor(score),
+         Survival = factor(Survival, levels = c("1", "0"))) 
 
 # and separately format data for survival analysis
-data2 <- data <- read_csv("data_table.csv", show_col_types = FALSE) %>%
+data2 <- data <- read_csv("Output/data_table.csv", show_col_types = FALSE) %>%
   # drop Star and Daisy
   filter(!bird %in% c("Daisy", "Star")) %>%
   mutate(time = persist,
-         status = ifelse(to_360 == 0, 1, 0),
+         status = ifelse(to_363 == 0, 1, 0),
          sex = factor(sex),
          score = factor(score)) %>%
-  select(-c(persist, to_90, to_360))
+  select(-c(persist, to_90, to_363))
 ```
 
 The binary survival yes/no to 90 days and 1 year for all variables (continuous as violin and categorical as mosaic). 
@@ -882,7 +753,7 @@ theme <- function(){
     facet_wrap(~period),
     xlab(element_blank()),
     theme_classic(),
-    scale_x_discrete(labels = c("Died", "Survived")),
+    scale_x_discrete(labels = c("Survived", "Died")),
     ggplot2::theme(axis.title.y = element_text(size = 11))
   )
 }
@@ -911,11 +782,11 @@ g4 <- ggplot(data, aes(x = Survival, y = weight, color = sex)) +
                       name = "Sex")+
   xlab(element_blank()) +
   theme_classic()+
-  scale_x_discrete(labels = c("Died", "Survived"))+
+  scale_x_discrete(labels = c("Survived", "Died"))+
   ggplot2::theme(axis.title.y = element_text(size = 11))
 
 g5 <- ggplot(data)+
-  geom_histogram(aes(x = score, fill = Survival), stat = "count", position = "fill")+
+  geom_bar(aes(x = score, fill = Survival), position="fill")+
   theme_classic() +
   scale_fill_manual(values = c("gray", "gray5"), 
                     labels = c("Survived", "Died"),
@@ -926,13 +797,11 @@ g5 <- ggplot(data)+
   ggplot2::theme(axis.title.y = element_text(size = 11))
 
 g6 <- ggplot(data)+
-  geom_histogram(aes(x = sex, fill = sex_survival), stat = "count", position = "fill")+
+  geom_bar(aes(x = sex, fill = Survival), position = "fill")+
   theme_classic() +
-  scale_fill_manual(values = c("#298c8c", "#001a1a", 
-                               "#f1a226", "#1f1500"), 
-                    labels = c("Female-Survived", "Female-Died",
-                               "Male-Survived", "Male-Died"),
-                    name = "Sex and Survival") +
+  scale_fill_manual(values = c("gray", "gray5"), 
+                    labels = c("Survived", "Died"),
+                    name = "Survival") +
   facet_wrap(~period) +
   xlab("Sex") +
   ylab("Survival proportion")+
@@ -943,26 +812,97 @@ combined_plot <- (g1 + g2) / (g3 + g4) / (g5 + g6) +
   plot_layout(guides = "collect") +
   plot_annotation(tag_levels = 'A')
 combined_plot
+
+# save
+ggsave("plots/binary_response_figure.png", dpi = 400, width = 22, height = 20, units = "cm")
 ```
 
 Second, the continuous persistence variables
 
 ```{r}
-# fit survival curves
-latency <- survfit(Surv(time, status) ~ sqrt(latency), data2)
+s1 <- survminer::ggsurvplot(survfit(Surv(time, status) ~ sex, data2),
+                 conf.int = TRUE,
+           legend.title = "Sex",
+           legend = "right",
+           palette = c("#298c8c", "#f1a226"),
+           legend.labs = c("Female", "Male"),
+    xlab = "Days post release",
+    font.x =  12,
+    font.y = 12,
+    font.tickslab = 10,
+    ggtheme = theme_bw(),
+    xlim = c(0, 365),
+    break.time.by = 100,
+    censor = FALSE)
 
-ggsurvplot(latency, data2)
+s2 <-  contsurvplot::plot_surv_area(model = coxph(Surv(time, status) ~ weight, data2, x= TRUE),
+               status = "status",
+               variable = "weight",
+               time = "time",
+               data = data2,
+               group = NULL,
+               legend.title = "Pre release\nweight (g)",
+               start_color="gray",
+               end_color="black",
+               alpha = 0.8,
+    xlab = "Days post release",
+    font.x =  12,
+    font.y = 12,
+    font.tickslab = 10,
+    ggtheme = theme_bw(),
+    xlim = c(0, 365),
+    break.time.by = 100,
+    censor = FALSE)
 
+s3 <- contsurvplot::plot_surv_area(model = coxph(Surv(time, status) ~ sex * weight, data2, x= TRUE),
+               data = data2,
+               time = "time", 
+               status = "status", 
+               variable = "weight", 
+               group = "sex",
+               start_color="gray",
+               end_color="black",
+               legend.title = "Pre release\nweight (g)",
+    xlab = "Days post release",
+    font.x =  12,
+    font.y = 12,
+    font.tickslab = 10,
+    ggtheme = theme_bw(),
+    xlim = c(0, 365),
+    break.time.by = 100,
+    censor = FALSE)
 
-m10 <- coxph(Surv(time, status) ~ sqrt(latency), data2, x= TRUE)
+# arrange multi plot - moved from ggarrange to patchwork, seems to work better
+combined_plot <- (s1$plot + s2) / (s3)+ 
+  plot_layout(guides = "collect") +
+  plot_annotation(tag_levels = 'A')
+  
+combined_plot
 
-# Plot the survival area
-plot_surv_area(model = m10, data = data2,
-               time = "time", status = "status", variable = "latency", group = NULL) %>%
-  ggsurvplot()
+# save
+ggsave("plots/weight_sex_persistence.png", dpi = 400, width = 20, height = 14, units = "cm")
 
-# and with survminer for ggplot
-survminer::ggsurvplot(m10, data = data2)
+# and latency by itself
+s4 <-  contsurvplot::plot_surv_area(model = coxph(Surv(time, status) ~ latency, data2, x = TRUE),
+               status = "status",
+               variable = "latency",
+               time = "time",
+               data = data2,
+               group = NULL,
+               legend.title = "Latency to\nreach food\n(seconds)",
+               start_color="gray",
+               end_color="black",
+               alpha = 0.8,
+    xlab = "Days post release",
+    font.x =  12,
+    font.y = 12,
+    font.tickslab = 10,
+    ggtheme = theme_bw(),
+    xlim = c(0, 365),
+    break.time.by = 100,
+    censor = FALSE)
+s4
 
+# save
+ggsave("plots/latency_persistence.png", dpi = 400, width = 14, height = 10, units = "cm")
 ```
-
