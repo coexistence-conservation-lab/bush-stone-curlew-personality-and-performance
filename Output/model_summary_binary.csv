@@ -1,0 +1,19 @@
+part,term,statistic,to 90,to 363,to 90,to 363,to 90,to 363,to 90,to 363
+estimates,scale(alert),estimate,-0.317,-0.066,,,,,,
+estimates,scale(alert),{std.error},0.666,0.562,,,,,,
+estimates,scale(alert),{p.value},0.634,0.906,,,,,,
+estimates,scale(sqrt(latency)),estimate,,,-1.382,-0.946,,,,
+estimates,scale(sqrt(latency)),{std.error},,,0.83,0.737,,,,
+estimates,scale(sqrt(latency)),{p.value},,,0.096,0.199,,,,
+estimates,scale(weight),estimate,,,,,1.473,0.304,,
+estimates,scale(weight),{std.error},,,,,0.976,0.573,,
+estimates,scale(weight),{p.value},,,,,0.131,0.596,,
+estimates,sexM,estimate,,,,,,,19.055,1.792
+estimates,sexM,{std.error},,,,,,,4390.307,1.19
+estimates,sexM,{p.value},,,,,,,0.997,0.132
+gof,Num.Obs.,,14,14,14,14,14,14,14,14
+gof,AIC,,18.3,23.1,15,21,15.4,22.8,14.6,20.6
+gof,BIC,,19.6,24.4,16.2,22.3,16.6,24.1,15.9,21.9
+gof,Log.Lik.,,,,,,,,-5.293,-8.318
+gof,F,,0.227,0.014,2.774,1.647,2.279,0.281,0,2.266
+gof,RMSE,,0.41,0.49,0.33,0.46,0.36,0.49,0.37,0.45

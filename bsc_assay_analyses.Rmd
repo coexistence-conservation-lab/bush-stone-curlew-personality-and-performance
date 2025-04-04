@@ -11,21 +11,18 @@ editor_options:
 knitr::opts_chunk$set(echo = TRUE)
 
 # Load packages
-pacman::p_load(beepr, contsurvplot, ggpubr, glmmTMB, janitor, MuMIn, patchwork, performance, readxl, sjPlot, survival, survminer, tidyverse)
-
-# Bird list excluding Daisy (returned to captivity) & Star (disease fate)
-birds <- c("Briar", "Nutmeg", "Aurora", "Robin",
-           "Iona", "Sage", "Koda", "Brook", "Clover",
-           "Prem", "Rove", "Valentine", "Marmalade", "Wobbles")
+pacman::p_load(contsurvplot, ggpubr, glmmTMB, janitor, modelsummary, MuMIn, patchwork, performance, readxl, sjPlot, survival, survminer, tidyverse)
 ```
 
 # Introduction
 
-This Markdown documents analyses done as part of paper 'captive behaviour predicts translocation performance in bush stone-curlews', a chapter of my doctoral studies. 
+This Markdown documents analyses done as part of paper 'Behavioural predictors of survival change over time for a translocated bird', a chapter of my doctoral studies. 
 
 The aim of this study is to test whether we can predict post-release performance using pre-release assays in translocated bush stone-curlews. If true, we might be able screen for suitable release candidates in future translocations. 
 
-In this study we translocated 16 bush stone-curlews into the Mt Rothwell fenced sancatuary from the Mt Rothwell breeding colony. They were released in October 2022 to January 2023 across three release groups. This was the pilot release at the site (i.e., no conspecifics prior to the translocation and a high degree of risk and uncertainty), which is why we released in a 'drip feed' manner over the Summer of 2022/23. 
+The purpose of the translocation was to hold the birds in a quasi-wild setting as an extension of the captive breeding facility. Birds from Mt Rothwell were destined for reintroduction to Orana Sanctuary in 2023.
+
+In this study we translocated 16 bush stone-curlews into the Mt Rothwell fenced sanctuary from the Mt Rothwell breeding colony. They were released in October 2022 to January 2023 across three release groups. This was the pilot release at the site (i.e., no conspecifics prior to the translocation and a high degree of risk and uncertainty), which is why we released in a 'drip feed' manner over the Summer of 2022/23. 
 
 Two individuals were excluded from analyses. Daisy was returned to captivity after two days due to risky behaviour (hanging around the buildings in a high traffic area). Star died of gastroenteritis shortly after release and so her fate was not linked to behaviour. 
 
@@ -45,15 +42,12 @@ Latency to reach food was defined as how long it took each bird, in seconds, to 
 
 ```{r latency data}
 # Read in and clean up latency assay data
-latency <- read_excel("Input/bsc assay data.xlsx", sheet =3) %>%
+latency <- read_excel("Input/bsc traits and assay data.xlsx", sheet = "Latency") %>%
   clean_names() %>%
-  # Select study birds
-  filter(bird %in% birds) %>%
   # Format dates
   mutate(date = as_date(date)) %>%
-  # Filter to assay dates
-  filter(date %in% c("2022-10-12", "2022-10-11")) %>%
-  dplyr::select(c("date", "bird", "reach", "latency_s")) %>%
+  # select columns
+  dplyr::select(c("date", "identity", "reach", "latency_s")) %>%
   # Convert yes/no to 1/0
   mutate(reach = ifelse(reach == "Yes", 1, 0)) %>%
   rename(latency = latency_s) %>%
@@ -62,9 +56,9 @@ latency <- read_excel("Input/bsc assay data.xlsx", sheet =3) %>%
 
 # Plot latency by bird
 ggplot(latency) + 
-  geom_bar(aes(bird, latency, fill = as.character(date)), 
+  geom_bar(aes(identity, latency, fill = as.character(date)), 
            position = "dodge", stat = "identity")+
-  geom_text(aes(y=600, x= bird, label = label), angle = 90, vjust = -0.5)+
+  geom_text(aes(y=600, x= identity, label = label), angle = 90, vjust = -0.5)+
   labs(x= element_blank(), y = "Latency to reach food (seconds)")+
   scale_x_discrete(guide = guide_axis(angle = 45)) +
   scale_fill_manual(values = c("#881C00FF","#1BB6AFFF"), name = "Assay date")+
@@ -78,12 +72,12 @@ We need to account for repeat measures but due to low sample size we cannot use 
 # Calculate mean latency by bird
 mlatency <- latency %>% 
   na.omit() %>%
-  group_by(bird) %>%
+  group_by(identity) %>%
   summarise(latency = mean(latency))
 
 # Plot mean latency by bird
 ggplot(mlatency) + 
-  geom_bar(aes(bird, latency), position = "dodge", stat = "identity")+
+  geom_bar(aes(identity, latency), position = "dodge", stat = "identity")+
   labs(x= element_blank(), y = "Mean latency to reach food (seconds)")+
   scale_x_discrete(guide = guide_axis(angle = 45)) +
   scale_fill_manual(values = c("#881C00FF","#1BB6AFFF"), name = "Assay date")+
@@ -113,17 +107,12 @@ Handling response was assigned during processing, and is an ordinal variable on 
 
 ```{r handling}
 # Read in handling data
-handling <- read_excel("Input/bsc assay data.xlsx", sheet = 7) %>%
+handling <- read_excel("Input/bsc traits and assay data.xlsx", sheet = "Ratings") %>%
   clean_names() %>%
-  rename(bird = identity) %>%
-  # Filter to study birds
-  filter(bird %in% birds) %>%
   # Format dates
   mutate(date = as_date(date)) %>%
-  # Filter to assay dates
-  filter(date %in% c("2022-10-20")) %>%
   # Drop unneeded columns
-  dplyr::select(c(bird, score))
+  dplyr::select(-c(date, notes))
 
 # Plot frequency of handling scores
 ggplot(handling)+
@@ -190,7 +179,7 @@ order <- c("Alert", "Head bob", "Head tilt", "Tail wag", "Camouflaged walk",
            "Fluff", "Preening", "Sitting", "Standing", "Walking", "Out of frame")
 
 # Read in and tidy up video assays 
-behaviour <- read_excel("Input/bsc assay data.xlsx", sheet =4) %>%
+behaviour <- read_excel("Input/bsc traits and assay data.xlsx", sheet = "Video encoding") %>%
   clean_names() %>%
   # Drop metadata columns
   dplyr::select(-c("clip", "note")) %>%
@@ -214,7 +203,7 @@ behaviour <- read_excel("Input/bsc assay data.xlsx", sheet =4) %>%
 
 # Plot proportion of time spent in each behaviour per bird
 ggplot(behaviour) + 
-  geom_bar(aes(x= bird, fill = Behaviour), position = "fill")+
+  geom_bar(aes(x= identity, fill = Behaviour), position = "fill")+
   labs(x= element_blank(), 
        y = "Proportion of time spent in each behaviour")+
   scale_x_discrete(guide = guide_axis(angle = 45)) +
@@ -224,10 +213,14 @@ ggplot(behaviour) +
         axis.text.y = element_blank())+
   scale_fill_viridis_d(direction = -1)
 
+# save to file
+ggsave("plots/time_spent_behaviours.png", dpi = 400, width = 20, height = 15, units = "cm", bg = 'white')
+
 # Calculate proportion of time spent in each behaviour and a summed 'alert' metric
-time <- count(behaviour, bird) %>%
+time <- count(behaviour, identity) %>%
   rename(total = n)
-prop_behav <- count(behaviour, bird, code) %>%
+
+prop_behav <- count(behaviour, identity, code) %>%
   left_join(time) %>%
   # Divide count of behaviour by total time for %
   mutate(prop = n/total) %>%
@@ -241,7 +234,7 @@ prop_behav <- count(behaviour, bird, code) %>%
 
 # Plot time spent alert
 ggplot(prop_behav) +
-  geom_bar(aes(x= bird, y= alert), position = "dodge", stat = "identity")+
+  geom_bar(aes(x= identity, y= alert), position = "dodge", stat = "identity")+
   labs(x= element_blank(), 
        y = "Proportion of time spent in alert behaviours")+
   scale_x_discrete(guide = guide_axis(angle = 45)) +
@@ -261,45 +254,24 @@ Interestingly, the amount of time spent 'alert' (yellows and greens) seems (visu
 
 The 'alert' metric is close to normally distributed. 
 
-## Assay correlation
-
-Are these metrics related? I.e. are there consistency within individuals in the types of responses across the different measures. 
-
-```{r correlated assay}
-m0 <- glm(score ~ alert * latency,
-          data = data)
-
-summary(m0)
-```
-
-Assays seem to be unrelated - so are measuring different things. 
-
 ## Traits
 
 I included some non-behavioural trait predictors to compare with the assays predictions. These included life-history and morphological traits.
 
 ```{r traits}
-# Read in additional bird metadata
-meta <- read_excel("Input/bsc assay data.xlsx", sheet = 8) %>%
+# Sex
+sex <- read_excel("Input/bsc traits and assay data.xlsx", sheet = "Metadata") %>%
   clean_names() %>%
-  rename(bird = individual) %>%
-  select(c(bird, sex))
+  select(c(identity, sex))
 
-# And pre-release weights
-weights <- read_excel("Input/bsc assay data.xlsx", sheet = 9) %>%
+# Pre-release weights
+weights <- read_excel("Input/bsc traits and assay data.xlsx", sheet = "Weights") %>%
   clean_names() %>%
-  select(c(identity, weight, condition)) %>%
-  rename(bird = identity)
+  # drop unneeded date column
+  dplyr::select(-date)
 
-# And morphometrics 
-traits <- read_excel("Input/bsc assay data.xlsx", sheet = 10) %>%
-  clean_names()  %>%
-  select(c(identity, wing, tail, tarsus)) %>%
-  rename(bird = identity) %>%
-  filter(bird %in% birds) %>%
-  # Combine all traits data
-  left_join(meta) %>%
-  left_join(weights)
+# combine
+traits <- left_join(sex, weights)
 
 # Summary of weights
 weight_sum <- traits %>%
@@ -308,38 +280,16 @@ weight_sum <- traits %>%
             weight_sd = sd(weight))
 ```
 
-Out of curiosity, I want to know whether the traits are correlated.
+Out of curiosity, I want to know if weight and sex are correlated.
 
 ```{r traits 2}
 # Weight by sex
 ggplot(traits, aes(x = sex, y = weight))+
   geom_boxplot()+
   theme_minimal()
-
-# Weight and condition by sex
-ggplot(traits, aes(x= condition, y= weight, fill = sex))+
-  geom_boxplot()+
-  geom_jitter()+
-  theme_minimal()
-
-# Weight and tarsus by sex
-ggplot(traits, aes(x= tarsus, y= weight, fill = sex))+
-  geom_point()+
-  geom_smooth(method = "lm")+
-  theme_minimal()
-
-# Wind chord and tarsus by sex
-ggplot(traits, aes(x= wing, y= tarsus, fill = sex))+
-  geom_point()+
-  geom_smooth(method = "lm")+
-  theme_minimal()
 ```
 
-1) Males weigh more than females. Weight in the 'good' condition score varies more for females compared to males.
-2) Females have in general a smaller weight:tarsus ratio than males, but with sex overlap.
-3) Males have a larger tarsus than females but wing lenght only differs at the extremes.
-
-I didn't end up using the morphometric data in the models due to convergence issues with low sample sizes. 
+Males weigh more than females.
 
 # Responses
 
@@ -355,18 +305,17 @@ We tested survival to both 90-days and 1-year post-release becasue we wanted to 
 
 ```{r survival}
 # Read in survival data
-survival <- read.csv("Input/survival.csv") %>%
+survival <- read_excel("Input/bsc traits and assay data.xlsx", sheet = "Survival") %>%
   clean_names() %>%
-  rename(bird = identity) %>%
   # Limit persistence value to minimum common tracked time of 360
   mutate(persist = ifelse(persist>363, 363, persist)) %>%
   # Convert true and false to 0 and 1
   mutate(to_90 = ifelse(to_90 == FALSE, 0, 1),
-         to_363 = ifelse(to_360 == FALSE, 0, 1)) %>%
+         to_363 = ifelse(to_363 == FALSE, 0, 1)) %>%
 # Drop unneeded columns
-  dplyr::select(c(bird, persist, to_90, to_363))
+  dplyr::select(c(identity, persist, to_90, to_363))
 
-# Combine survival with all predictors
+# Combine all traits and response (survival)
 data <- left_join(survival, mlatency) %>%
   left_join(handling) %>%
   left_join(prop_behav) %>%
@@ -384,8 +333,21 @@ write.csv(data, row.names = FALSE, "Output/data_table.csv")
 # read in data
 data <- read_csv("Output/data_table.csv") %>%
   # drop Star and Daisy
-  filter(!bird %in% c("Daisy", "Star"))
+  filter(!identity %in% c("Daisy", "Star"))
 ```
+
+## Assay correlation
+
+Are these metrics related? I.e. are there consistency within individuals in the types of responses across the different measures. 
+
+```{r correlated assay}
+m0 <- glm(score ~ alert * latency,
+          data = data)
+
+summary(m0)
+```
+
+Assays seem to be unrelated - so are measuring different things. 
 
 ## Binary survival
 
@@ -633,7 +595,6 @@ km <- data %>%
   mutate(time = persist,
          status = ifelse(to_363 == 0, 1, 0),
          sex = as.factor(sex),
-         condition = as.factor(condition),
          score = as.factor(score)) %>%
   select(-c(persist, to_90, to_363))
 ```
@@ -647,7 +608,7 @@ Start by looking at the overall survival probabilities for all birds.
 m6 <- survfit(Surv(time, status) ~ 1, km)
 
 # Estimated survival probabilities
-summary(m6, times = c(1,90, 180, 270, 360))
+summary(m6, times = c(1,90, 180, 270, 363))
 ```
 
 The probability of survival to 1 year is 43% (upper CI = 78%, lower CI = 23%). 
@@ -711,6 +672,20 @@ summary(m9c)
 
 Combined effects significant.
 
+# Model effects summary tables
+
+```{r}
+# binary response effects - not including hanlding which is chi squared instead of glm
+modelsummary(list(m1a, m1b, m2a, m2b, m4a, m4b, m5a, m5b), 
+             estimate = "{estimate}", statistic = c("{std.error}", "{p.value}"), coef_omit = "Intercept",
+             output = "Output/model_summary_binary.csv")
+
+# time-to-event model effects
+modelsummary(list(m7, m8, m9a, m9b, m9c), 
+             estimate = "{estimate}", statistic = c("{std.error}", "{p.value}"), coef_omit = "Intercept",
+             output = "Output/model_summary_time_to_event.csv")
+```
+
 # Figures
 
 Making some nicer looking figures for publication here. 
@@ -719,7 +694,7 @@ Making some nicer looking figures for publication here.
 # read in data
 data <- read_csv("Output/data_table.csv", show_col_types = FALSE) %>%
   # drop Star and Daisy
-  filter(!bird %in% c("Daisy", "Star")) %>%
+  filter(!identity %in% c("Daisy", "Star")) %>%
   # rename period labels to look nicer on graphs
   rename("90 days" = to_90,
          "1 year" = to_363) %>%
@@ -734,7 +709,7 @@ data <- read_csv("Output/data_table.csv", show_col_types = FALSE) %>%
 # and separately format data for survival analysis
 data2 <- data <- read_csv("Output/data_table.csv", show_col_types = FALSE) %>%
   # drop Star and Daisy
-  filter(!bird %in% c("Daisy", "Star")) %>%
+  filter(!identity %in% c("Daisy", "Star")) %>%
   mutate(time = persist,
          status = ifelse(to_363 == 0, 1, 0),
          sex = factor(sex),
